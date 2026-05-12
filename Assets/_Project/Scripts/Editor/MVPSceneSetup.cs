@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.IO;
 using Project.CameraRig;
 using Project.Core;
+using Project.Crafting;
 using Project.DebugUI;
 using Project.Harvesting;
 using Project.Health;
@@ -30,6 +31,8 @@ namespace Project.EditorTools
         const string SkillsSODir = SODir + "/Skills";
         const string ItemsSODir = SODir + "/Items";
         const string HarvestablesSODir = SODir + "/Harvestables";
+        const string RecipesSODir = SODir + "/Recipes";
+        const string RecipeDatabasePath = SODir + "/RecipeDatabase.asset";
         const string ScenePath = ScenesDir + "/MVP.unity";
         const string UnitPrefabPath = PrefabsDir + "/Unit.prefab";
         const string MarkerPrefabPath = PrefabsDir + "/OrderMarker.prefab";
@@ -47,6 +50,7 @@ namespace Project.EditorTools
             EnsureFolder(SkillsSODir);
             EnsureFolder(ItemsSODir);
             EnsureFolder(HarvestablesSODir);
+            EnsureFolder(RecipesSODir);
 
             // ScriptableObject data first — prefabs reference these.
             var bodyParts = CreateOrUpdateBodyPartDefinitions();
@@ -54,6 +58,10 @@ namespace Project.EditorTools
             var items = CreateOrUpdateItemData();
             var itemDatabase = CreateOrUpdateItemDatabase(items);
             var harvestables = CreateOrUpdateHarvestableDefinitions(itemDatabase);
+            var recipes = CreateOrUpdateRecipeDefinitions(itemDatabase);
+            // Database asset is created/refreshed on disk; the local ref is
+            // not needed until commit 2 wires it into the debug panel.
+            CreateOrUpdateRecipeDatabase(recipes);
 
             var unitPrefab = BuildUnitPrefab(bodyParts, xpCurve);
             var markerPrefab = BuildOrderMarkerPrefab();
@@ -677,6 +685,14 @@ namespace Project.EditorTools
                 new ItemSeed("fishing_rod",       "Canne à pêche",      ItemType.Tool,       1.0f, false, 1,  new Color(0.55f, 0.35f, 0.20f)),
                 new ItemSeed("test_rock_10kg",   "Gros caillou (test)", ItemType.Misc,      10.0f, false, 1,  new Color(0.80f, 0.20f, 0.20f)),
                 new ItemSeed("test_boulder_50kg","Bloc lourd (test)",   ItemType.Misc,      50.0f, false, 1,  new Color(0.60f, 0.10f, 0.10f)),
+
+                // Session 5 — Crafting outputs (bandage + 5 weapon placeholders).
+                new ItemSeed("bandage",           "Bandage",            ItemType.Consumable, 0.2f, true,  20, new Color(0.95f, 0.95f, 0.95f)),
+                new ItemSeed("spear_stone",       "Stone Spear",        ItemType.Weapon,     4.0f, false, 1,  new Color(0.75f, 0.62f, 0.42f)),
+                new ItemSeed("sword_stone",       "Stone Sword",        ItemType.Weapon,     3.5f, false, 1,  new Color(0.60f, 0.60f, 0.65f)),
+                new ItemSeed("shield_wood",       "Wooden Shield",      ItemType.Weapon,     5.0f, false, 1,  new Color(0.55f, 0.35f, 0.20f)),
+                new ItemSeed("bow_basic",         "Basic Bow",          ItemType.Weapon,     2.0f, false, 1,  new Color(0.30f, 0.20f, 0.10f)),
+                new ItemSeed("crossbow_basic",    "Basic Crossbow",     ItemType.Weapon,     4.5f, false, 1,  new Color(0.55f, 0.40f, 0.25f)),
             };
 
             var list = new List<ItemData>(seeds.Length);
@@ -925,6 +941,119 @@ namespace Project.EditorTools
             hv.CurrentHealth = def.MaxHealth;
 
             return go;
+        }
+
+        // ---- Recipes & RecipeDatabase ----
+
+        static List<RecipeDefinition> CreateOrUpdateRecipeDefinitions(ItemDatabase db)
+        {
+            EnsureFolder(RecipesSODir);
+
+            var list = new List<RecipeDefinition>();
+
+            // Hand-craft (no station required).
+            list.Add(SeedRecipe(db, "craft_bandage",       "Bandage",        time: 1f, requiresStation: false,
+                inputs: new[] { ("branch", 1) },
+                outputs: new[] { ("bandage", 1) },
+                xp: 2f));
+            list.Add(SeedRecipe(db, "craft_stone_axe",     "Stone Axe",      time: 3f, requiresStation: false,
+                inputs: new[] { ("branch", 2), ("stone", 1) },
+                outputs: new[] { ("stone_axe", 1) },
+                xp: 5f));
+            list.Add(SeedRecipe(db, "craft_stone_pickaxe", "Stone Pickaxe",  time: 3f, requiresStation: false,
+                inputs: new[] { ("branch", 2), ("stone", 1) },
+                outputs: new[] { ("stone_pickaxe", 1) },
+                xp: 5f));
+            list.Add(SeedRecipe(db, "craft_fishing_rod",   "Fishing Rod",    time: 4f, requiresStation: false,
+                inputs: new[] { ("branch", 3), ("stone", 1) },
+                outputs: new[] { ("fishing_rod", 1) },
+                xp: 6f));
+
+            // Workbench recipes.
+            list.Add(SeedRecipe(db, "craft_spear_stone",    "Stone Spear",    time: 6f,  requiresStation: true, stationType: CraftStationType.Workbench,
+                inputs: new[] { ("wood_log", 2), ("stone_chunk", 1) },
+                outputs: new[] { ("spear_stone", 1) },
+                xp: 10f));
+            list.Add(SeedRecipe(db, "craft_sword_stone",    "Stone Sword",    time: 8f,  requiresStation: true, stationType: CraftStationType.Workbench,
+                inputs: new[] { ("wood_log", 3), ("stone_chunk", 2) },
+                outputs: new[] { ("sword_stone", 1) },
+                xp: 15f));
+            list.Add(SeedRecipe(db, "craft_shield_wood",    "Wooden Shield",  time: 5f,  requiresStation: true, stationType: CraftStationType.Workbench,
+                inputs: new[] { ("wood_log", 4) },
+                outputs: new[] { ("shield_wood", 1) },
+                xp: 10f));
+            list.Add(SeedRecipe(db, "craft_bow_basic",      "Basic Bow",      time: 7f,  requiresStation: true, stationType: CraftStationType.Workbench,
+                inputs: new[] { ("wood_log", 2), ("branch", 4) },
+                outputs: new[] { ("bow_basic", 1) },
+                xp: 12f));
+            list.Add(SeedRecipe(db, "craft_crossbow_basic", "Basic Crossbow", time: 10f, requiresStation: true, stationType: CraftStationType.Workbench,
+                inputs: new[] { ("wood_log", 3), ("stone_chunk", 1) },
+                outputs: new[] { ("crossbow_basic", 1) },
+                xp: 18f));
+
+            return list;
+        }
+
+        static RecipeDefinition SeedRecipe(
+            ItemDatabase db, string id, string name,
+            float time, bool requiresStation, CraftStationType stationType = CraftStationType.Workbench,
+            (string id, int qty)[] inputs = null, (string id, int qty)[] outputs = null,
+            float xp = 0f, SkillType xpSkill = SkillType.Labour)
+        {
+            string path = $"{RecipesSODir}/Recipe_{id}.asset";
+            var recipe = AssetDatabase.LoadAssetAtPath<RecipeDefinition>(path);
+            if (recipe == null)
+            {
+                recipe = ScriptableObject.CreateInstance<RecipeDefinition>();
+                AssetDatabase.CreateAsset(recipe, path);
+            }
+
+            recipe.Id = id;
+            recipe.DisplayName = name;
+            recipe.BaseCraftTime = time;
+            recipe.RequiresStation = requiresStation;
+            recipe.StationType = stationType;
+            recipe.XPGainSkill = xpSkill;
+            recipe.XPGainAmount = xp;
+
+            recipe.Inputs = BuildStacks(db, inputs);
+            recipe.Outputs = BuildStacks(db, outputs);
+
+            EditorUtility.SetDirty(recipe);
+            return recipe;
+        }
+
+        static List<ItemStack> BuildStacks(ItemDatabase db, (string id, int qty)[] entries)
+        {
+            var stacks = new List<ItemStack>();
+            if (entries == null) return stacks;
+            for (int i = 0; i < entries.Length; i++)
+            {
+                var def = db.GetById(entries[i].id);
+                if (def == null)
+                {
+                    Debug.LogWarning($"[MVPSceneSetup] Recipe seed references unknown item id '{entries[i].id}' — skipped.");
+                    continue;
+                }
+                stacks.Add(new ItemStack { Def = def, Quantity = Mathf.Max(1, entries[i].qty) });
+            }
+            return stacks;
+        }
+
+        static RecipeDatabase CreateOrUpdateRecipeDatabase(List<RecipeDefinition> recipes)
+        {
+            EnsureFolder(SODir);
+
+            var db = AssetDatabase.LoadAssetAtPath<RecipeDatabase>(RecipeDatabasePath);
+            if (db == null)
+            {
+                db = ScriptableObject.CreateInstance<RecipeDatabase>();
+                AssetDatabase.CreateAsset(db, RecipeDatabasePath);
+            }
+
+            db.EditorReplaceAll(recipes);
+            EditorUtility.SetDirty(db);
+            return db;
         }
     }
 }
