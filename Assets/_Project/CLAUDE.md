@@ -1,4 +1,4 @@
-# Dustborne — Fondations + Santé/Sang + Skills + Items + Récolte
+# Dustborne — Fondations + Santé/Sang + Skills + Items + Récolte + Crafting
 
 Jeu RTS-like, vue de haut, **une unité** contrôlable par le joueur. Inspirations : Kenshi (pause active, compétences progressives, dégâts par parties du corps), Valheim/Rust (récolte → craft → armement). MVP : zone fixe, hand-crafted.
 
@@ -7,6 +7,7 @@ Sessions livrées :
 - **Session 2** — Santé/Sang + Skills + Bridge.
 - **Session 3** — Items, Inventaire au poids, Pickup, intégration vitesse/XP, Revive.
 - **Session 4** — Dette technique (MPB, drop merge, dédup, extraction PassiveXPHooks) + Récolte (Harvestable, HarvestOrder, 9 noeuds en scène).
+- **Session 5** — Crafting (RecipeDefinition + RecipeDatabase + CraftingStation + CraftOrder, hand-craft & workbench, 9 recettes, 1 Workbench en scène, bandage + 5 armes placeholders).
 
 Tous les modules suivants se branchent dessus sans modifier ces fondations.
 
@@ -42,8 +43,11 @@ Tous les modules suivants se branchent dessus sans modifier ces fondations.
   - `SkillSystem` — Module 1.5 (livré)
   - `Inventory` — Module 2 (livré)
   - `SkillModifiersBridge` — pont event-driven Health ↔ Skills ↔ Inventory (livré)
-  - `PassiveXPHooks` — trickle XP (Speed en marchant, Strength en overweight). Séparé du Bridge depuis Session 4 (livré)
-  - `Equipment`, `CombatSystem`, ... — Modules 5+
+  - `PassiveXPHooks` — trickle XP (Speed en marchant, Strength sous charge). Séparé du Bridge depuis Session 4 (livré)
+  - `Equipment`, `CombatSystem`, ... — Modules 6+
+- Composants placeables dans la scène (non sur Unit) :
+  - `Harvestable` — Module 3 (livré)
+  - `CraftingStation` — Module 4 (livré). Auto-register dans une liste static à OnEnable, désinscription à OnDisable.
 
 ### 5. Couplage event-based (Health ↔ Skills ↔ Inventory)
 `HealthSystem`, `SkillSystem` et `Inventory` **ne se référencent pas directement entre eux**. Tout le cross-domain wiring passe par `SkillModifiersBridge`. Schéma :
@@ -287,8 +291,62 @@ Le tint runtime utilise `MaterialPropertyBlock`, jamais de Material clone. Quand
 - **Multi-tools** : `RequiredTool` → `List<ItemData> AcceptedTools` quand on aura plusieurs paliers d'outil.
 - **Drop per tick** : un `HarvestableDefinition.DropMode { OnDepleted, PerTick }` permettra le filet de pêche qui produit en continu.
 - **Anims** : `HarvestableInteractAnim` jouable côté Unit (pas bloquant, juste cosmétique).
-- **Durabilité d'outil** : décrémenter une durabilité sur l'outil à chaque tick, à intégrer quand `ItemData` aura un champ `Durability` (Module 5 ou plus tard).
+- **Durabilité d'outil** : décrémenter une durabilité sur l'outil à chaque tick, à intégrer quand `ItemData` aura un champ `Durability` (Module 6 ou plus tard).
 - **Respawn** : `HarvestableRespawnerService` mémorise les positions des noeuds détruits + un timer → re-instancie (Module 7).
+
+---
+
+## Module 4 — Crafting
+
+### Modèle
+- **`RecipeDefinition`** (SO) porte une liste d'`Inputs` (List<ItemStack>), une liste d'`Outputs`, un `BaseCraftTime`, un éventuel station requise, et un gain d'XP à la complétion. Inputs/outputs référencent des `ItemData` directement (pas par ID).
+- **`RecipeDatabase`** (SO) : registre de toutes les recettes, indexé par `Id` pour le save/load et la liste du debug panel. Identique à `ItemDatabase` côté usage.
+- **`CraftStationType`** enum : Workbench (MVP) + Forge (réservé).
+- **Nullable workaround** : `RecipeDefinition.RequiresStation` (bool) + `StationType` (enum). Propriété `RequiredStation` renvoie `CraftStationType?` pour les call sites. Évite la non-sérialisation des `Nullable<enum>` par Unity.
+
+### Hand-craft vs station
+- `RequiredStation == null` → hand-craft. L'unité reste sur place (`agent.isStopped = true` au OnStart). Pas de navigation. Utile pour les outils basiques (hache pierre, bandage).
+- `RequiredStation == Workbench` → l'unité walks vers la station la plus proche du type demandé. Si aucune en scène → Failed avec log clair.
+
+### CraftingStation (placeables)
+MonoBehaviour sur le prefab Workbench/Forge. Auto-add un `NavMeshObstacle` (carve = true) à `Awake` comme `Harvestable`. Maintient un registre static `ActiveStations` via `OnEnable`/`OnDisable`, exposé via :
+- `static CraftingStation FindNearest(Vector3 origin, CraftStationType type)` — sweep linéaire O(n), négligeable au scale prévu.
+- `static bool AnyAvailable(CraftStationType type)` — utilisé par le debug panel pour griser les recettes sans station valide.
+
+`InteractionPoint` optionnel (Transform enfant). Si absent, fallback = `position - transform.forward × 1.0f`. `InteractionRange` ~1.5–2 m.
+
+### CraftOrder
+Implémente `IOrder` + `ITargetedOrder` (pour la ligne preview shift). Construit avec une `RecipeDefinition` directement — **ne référence jamais `RecipeDatabase`**. Cycle :
+1. **OnStart** : check Inventory + Has() pour chaque input → Failed si manque. Résolution station si nécessaire → Failed si aucune trouvée. Hand-craft : `agent.isStopped = true`. Station : `SetDestination(stationInteractionPos)`.
+2. **Tick** : approche jusqu'à `InteractionRange` (XZ) si station-craft, puis `agent.isStopped = true` + `LookAt` cosmétique. Incrémente `progressTime += deltaTime × skills.GetCraftSpeedMult()`. Pause-safe natif via `GameTime.DeltaTime`.
+3. **Complétion** (quand `progressTime ≥ BaseCraftTime`) : re-check inputs (le joueur a pu vider l'inventaire) → Failed si manque. `Inventory.Remove` chaque input, `Inventory.Add` chaque output (overweight autorisé, cohérent avec pickup). `Skills.GainXP(Recipe.XPGainSkill, Recipe.XPGainAmount)` une seule fois. → Complete.
+4. **OnEnd** : `agent.isStopped = false; agent.ResetPath()`.
+
+### Politique de consommation
+**Inputs consommés UNIQUEMENT à la complétion** — l'annulation (`Clear()` queue, click sans shift, etc.) est lossless, on n'a rien à rembourser. Re-check au moment du Remove couvre le cas où le joueur a vidé son sac entre temps. XP grant aussi à la fin, jamais par tick — sinon farm d'une recette ultra-courte → XP infinie.
+
+### Items "Weapon" placeholders
+6 nouveaux items créés en Session 5 : `bandage`, `spear_stone`, `sword_stone`, `shield_wood`, `bow_basic`, `crossbow_basic`. Le bandage est utilisable (Type=Consumable, stackable). Les 5 armes (Type=Weapon, non-stack) **dorment dans l'inventaire** jusqu'à l'arrivée du module Combat — pas de logique d'équipement encore.
+
+### 9 recettes en MVP
+| Id | Type | Inputs | Outputs | Time | XP |
+|---|---|---|---|---|---|
+| `craft_bandage` | hand | branch×1 | bandage×1 | 1s | +2 Labour |
+| `craft_stone_axe` | hand | branch×2, stone×1 | stone_axe×1 | 3s | +5 Labour |
+| `craft_stone_pickaxe` | hand | branch×2, stone×1 | stone_pickaxe×1 | 3s | +5 Labour |
+| `craft_fishing_rod` | hand | branch×3, stone×1 | fishing_rod×1 | 4s | +6 Labour |
+| `craft_spear_stone` | Workbench | wood_log×2, stone_chunk×1 | spear_stone×1 | 6s | +10 Labour |
+| `craft_sword_stone` | Workbench | wood_log×3, stone_chunk×2 | sword_stone×1 | 8s | +15 Labour |
+| `craft_shield_wood` | Workbench | wood_log×4 | shield_wood×1 | 5s | +10 Labour |
+| `craft_bow_basic` | Workbench | wood_log×2, branch×4 | bow_basic×1 | 7s | +12 Labour |
+| `craft_crossbow_basic` | Workbench | wood_log×3, stone_chunk×1 | crossbow_basic×1 | 10s | +18 Labour |
+
+### Préparé pour le futur
+- **Forge** : nouveau `CraftStationType.Forge`, recettes métal (`iron_ingot`, `iron_sword`...). Setup identique au Workbench, juste un autre prefab + type. Aucune modif du `CraftOrder`.
+- **Multi-output stochastique** : ajouter `RecipeDefinition.OutputRoll` pour des drops aléatoires (ex : 70% chance d'un bonus). MVP : outputs déterministes.
+- **Recettes débloquées** : `Recipe.UnlockedAt` (Labour level requis). MVP : tout débloqué.
+- **UI worldspace station** : double-clic sur Workbench ouvre un panneau de recettes filtrées (post-MVP).
+- **Save/Load recettes connues** : sérialisées via `Recipe.Id` (lookup via `RecipeDatabase.GetById`).
 
 ---
 
@@ -342,27 +400,37 @@ Assets/_Project/
       Harvestable.cs            MonoBehaviour on world nodes
       Orders/                   Project.Harvesting.Orders
         HarvestOrder.cs
+    Crafting/                   Project.Crafting
+      CraftStationType.cs       enum
+      RecipeDefinition.cs       ScriptableObject (with nullable RequiredStation property)
+      RecipeDatabase.cs         ScriptableObject (registry by Id)
+      CraftingStation.cs        MonoBehaviour, static ActiveStations registry
+      Orders/                   Project.Crafting.Orders
+        CraftOrder.cs
     Input/                      Project.PlayerInput
       PlayerInputController.cs  raycast click → PickupOrder | HarvestOrder | MoveOrder
     Debug/                      Project.DebugUI
       GameTimeDebugUI.cs        HUD top-left
-      HealthSkillsDebugPanel.cs F1 toggle, paper-doll + Inventory + Harvestables + buttons
+      HealthSkillsDebugPanel.cs F1 toggle, paper-doll + Inventory + Harvestables + Crafting + buttons
     Editor/                     Project.EditorTools
       MVPSceneSetup.cs          Tools menu builder
   ScriptableObjects/
     BodyParts/                  7 BodyPartDefinition assets
     Skills/
       DefaultXPCurve.asset
-    Items/                      10 ItemData assets (test set)
+    Items/                      16 ItemData assets (10 from S3 + 6 new in S5)
     ItemDatabase.asset
     Harvestables/               3 HarvestableDefinition assets (tree, rock, fishing)
+    Recipes/                    9 RecipeDefinition assets
+    RecipeDatabase.asset
   Prefabs/
     Unit.prefab                 (Health / Skills / Inventory / Bridge / PassiveXPHooks)
     OrderMarker.prefab
     OrderMarker_Queued.prefab
     WorldItem_Generic.prefab    fallback world body (cube tinted via MPB)
+    Workbench.prefab            crafting station with CraftingStation + NavMeshObstacle
   Scenes/
-    MVP.unity                   (5 WorldItems + 9 Harvestables placed; navmesh baked w/ obstacles)
+    MVP.unity                   (5 WorldItems + 9 Harvestables + 1 Workbench placed; navmesh baked w/ all obstacles)
   Art/                          materials générés par le setup (URP Lit + line)
   Settings/                     réservé (URP assets, etc.)
 ```
@@ -392,10 +460,10 @@ Assets/_Project/
 | ~~1.5~~ | ~~Skills (XP par usage)~~ | **livré** |
 | ~~2~~ | ~~Items & Inventaire au poids + Pickup~~ | **livré** |
 | ~~3~~ | ~~Récolte (Harvestable + HarvestOrder + drops via WorldItems)~~ | **livré** |
-| 4 | Crafting (recettes, stations, output) | `CraftingStation` MonoBehaviour, `CraftOrder : IOrder`. Consomme via `inventory.Remove`, produit via `inventory.Add` (ou WorldItem.Spawn devant la station). Vitesse modulée par `GetCraftSpeedMult`. |
+| ~~4~~ | ~~Crafting (RecipeDefinition + Database + CraftingStation + CraftOrder, hand & workbench)~~ | **livré** |
 | 5 | Combat (mêlée, dégâts directionnels, hitbox par partie du corps) | `AttackOrder : IOrder, ITargetedOrder`, `WeaponSystem`, `HealthSystem.ApplyDamage`. Construit le `DamageInfo` avec `Attacker = this.Unit` et `Weapon = ...`. Durabilité d'outil potentiellement intégrée ici. |
-| 6 | Equipment (slots d'armes/outils équipés) | `Equipment` component séparé, *pas* une extension d'Inventory. Items équipés sortent de l'inventaire et passent en slot. |
-| 7 | Monde / Respawn / Save-Load | `HarvestableRespawnerService` re-spawn les noeuds après timer. Sauvegarde via `ItemData.Id` (lookup `ItemDatabase.GetById`). |
+| 6 | Equipment (slots d'armes/outils équipés) | `Equipment` component séparé, *pas* une extension d'Inventory. Items équipés sortent de l'inventaire et passent en slot. Module Combat utilisera l'arme équipée. |
+| 7 | Monde / Respawn / Save-Load | `HarvestableRespawnerService` re-spawn les noeuds après timer. Sauvegarde via `ItemData.Id` + `Recipe.Id` (lookup `ItemDatabase.GetById` / `RecipeDatabase.GetById`). |
 | 8 | IA (monstres, factions) | nouveau composant `AIController` qui pousse des `IOrder` dans une `OrderQueue` exactement comme le joueur. **Réutilise `HealthSystem`, `SkillSystem`, `Inventory` tels quels.** |
 
 Conséquence : `Unit` accepte tous ces composants sans modification, et `IOrder` accueille tous ces nouveaux types d'ordre sans changement d'interface.
@@ -411,11 +479,12 @@ Conséquence : `Unit` accepte tous ces composants sans modification, et `IOrder`
 4. Crée/met à jour :
    - `Assets/_Project/ScriptableObjects/BodyParts/BodyPart_*.asset` (7)
    - `Assets/_Project/ScriptableObjects/Skills/DefaultXPCurve.asset`
-   - `Assets/_Project/ScriptableObjects/Items/Item_*.asset` (10) + `ItemDatabase.asset`
+   - `Assets/_Project/ScriptableObjects/Items/Item_*.asset` (16) + `ItemDatabase.asset`
    - `Assets/_Project/ScriptableObjects/Harvestables/HV_*.asset` (3 : Tree, Rock, FishingSpot)
+   - `Assets/_Project/ScriptableObjects/Recipes/Recipe_*.asset` (9) + `RecipeDatabase.asset`
    - `Assets/_Project/Prefabs/Unit.prefab` (Health / Skills / Inventory / Bridge / PassiveXPHooks)
-   - `Assets/_Project/Prefabs/OrderMarker*.prefab` + `WorldItem_Generic.prefab`
-   - `Assets/_Project/Scenes/MVP.unity` (NavMesh bakée autour des obstacles ET des harvestables, 5 WorldItems + 9 Harvestables placés, GameSystems wired)
+   - `Assets/_Project/Prefabs/OrderMarker*.prefab` + `WorldItem_Generic.prefab` + `Workbench.prefab`
+   - `Assets/_Project/Scenes/MVP.unity` (NavMesh bakée autour de tous les obstacles, 5 WorldItems + 9 Harvestables + 1 Workbench placés, GameSystems wired)
 5. Vérifie en bas de la console : `[MVPSceneSetup] Built scene at ...`.
 
 ### 2. Lancer
@@ -436,29 +505,37 @@ Conséquence : `Unit` accepte tous ces composants sans modification, et `IOrder`
 
 Priorité du raycast clic : **WorldItem > Harvestable > sol**. Tous via `GetComponentInParent<T>` — pas de layer requis.
 
-### 4. Tester Santé/Skills/Inventory/Récolte
-- **F1** ouvre le panel à droite. Sections : Blood, Body Parts, Skills, Inventory (foldable), Harvestables (foldable), Global Actions.
+### 4. Tester Santé/Skills/Inventory/Récolte/Crafting
+- **F1** ouvre le panel à droite. Sections : Blood, Body Parts, Skills, Inventory (foldable), Harvestables (foldable), Crafting (foldable), Global Actions.
 - Boutons par partie : Damage 10/30/100, Bandage, Heal 50.
 - Boutons par skill : +50 XP, +500 XP.
 - Inventory : Add 1/Add 10 pour chaque item du Database, Drop 1/Drop All par stack, Clear, Spawn 3 items.
 - Harvestables : liste de tous les noeuds en scène avec HP courant, bouton Reset par noeud, bouton "Reset all".
+- Crafting : 9 recettes du Database, greyed si inputs/station manquants, toggle "Show only craftable now", header montre `(X/9 available)` + progression live si CraftOrder en cours.
 - Globaux : Drain Blood, Restore Blood, KILL, REVIVE, RESET.
 - Readouts : tous les modifier getters + `weight speed x` affichés en live.
 
-Cycle de test rapide : Add stone_axe (debug) → clic sur arbre → unité s'y rend, chip-chip-chip, arbre tombe, 3-5 bûches éparpillées → clic sur les bûches (PickupOrder) → inventaire se remplit, vitesse plonge si overweight, Strength XP monte.
+Cycle de test "from scratch to crossbow" :
+1. Add stone_axe via debug → clic sur arbre → wood_log éparpillés → ramasse-les.
+2. Add stone_pickaxe (debug ou Craft hand-craft si tu as les inputs) → clic sur rocher → stone_chunk éparpillés → ramasse.
+3. Va devant le Workbench (clic Craft Spear Stone) → l'unité s'y rend, 6s de progress → spear_stone produit, +10 XP Labour. Inputs (wood_log×2 + stone_chunk×1) retirés.
+4. Add Labour XP via debug → temps de craft visiblement réduit sur la recette suivante.
 
 ---
 
 ## Anti-patterns connus (à ne pas reproduire)
 
-- `Time.deltaTime` dans `Health`, `Skills`, `Items`, `Harvesting`, `Unit`, `OrderQueue`, ou tout futur gameplay → **utiliser `GameTime.DeltaTime`**.
+- `Time.deltaTime` dans `Health`, `Skills`, `Items`, `Harvesting`, `Crafting`, `Unit`, `OrderQueue`, ou tout futur gameplay → **utiliser `GameTime.DeltaTime`**.
 - Logique métier dans `Unit` → **créer un component dédié**.
 - Référence directe entre `HealthSystem`, `SkillSystem`, `Inventory` → **passer par events + bridge**.
-- `Resources.Load` → **utiliser ItemDatabase / refs sérialisées**.
+- `Resources.Load` → **utiliser ItemDatabase / RecipeDatabase / refs sérialisées**.
 - Auto-pickup à proximité → **toujours via PickupOrder**.
-- Hardcoder la liste des items / les stats des harvestables → **tout via SO**.
+- Hardcoder la liste des items / les stats des harvestables / les recettes → **tout via SO**.
 - `HarvestOrder` qui ajoute directement à Inventory → **drops passent par WorldItems** (un autre acteur peut les ramasser, save/load les capture).
-- Animations bloquantes pendant la récolte → **MVP : juste agent.isStopped = true, pas d'anim attendue**.
+- `CraftOrder` qui consomme les inputs au démarrage → **consommation à la fin uniquement** (annulation lossless, re-check d'inputs au moment du Remove).
+- `CraftOrder` qui référence `RecipeDatabase` → **prend une `RecipeDefinition` directement**, le database sert au debug panel / au save.
+- XP de craft par tick → **uniquement à la complétion**, sinon farm de recette ultra-courte.
+- Animations bloquantes pendant récolte / craft → **MVP : juste agent.isStopped = true, pas d'anim attendue**.
 - Re-bake NavMesh à chaque frame → **uniquement dans MVPSceneSetup**. Le carving runtime de `NavMeshObstacle` gère les destructions.
 - Quantité négative dans un stack → **clamp à 0 (suppression du stack)**.
 - Drops superposés au même pixel → **offset random dans un cercle**.
@@ -467,7 +544,8 @@ Cycle de test rapide : Add stone_axe (debug) → clic sur arbre → unité s'y r
 - Level up = heal gratos → **préserver les ratios** (politique Vitality).
 - Saigner une partie Severed mais avec `BleedRateSevered = 0` → **mettre la valeur dans la SO, pas en dur**.
 - Pop-up de level up bloquant → **passif, juste event + UI update**.
-- `FindObjectOfType` répété en runtime → **cacher la ref**.
+- `FindObjectOfType` répété en runtime → **cacher la ref (cf. `CraftingStation.ActiveStations` registry pattern)**.
+- UI worldspace pour interagir avec les stations → **post-MVP, le debug panel suffit pour l'instant**.
 
 ---
 
@@ -480,8 +558,9 @@ Cycle de test rapide : Add stone_axe (debug) → clic sur arbre → unité s'y r
   - `Skills → Health + Items`
   - `Items → Units` (PickupOrder)
   - `Harvesting → Items + Skills + Units`
+  - `Crafting → Items + Skills + Units`
   - `PlayerInput → Units + Items + Harvesting`
-  - `Debug → Health + Skills + Items + Harvesting + Units`
+  - `Debug → Health + Skills + Items + Harvesting + Crafting + PlayerInput + Units`
 - **Pas de sélection multi-unités** : MVP mono-unité. `PlayerInputController` cherche le 1er Unit de la scène en fallback.
 - **WorldItem dropped quantity invisible** : la pile au sol ne montre pas sa qty. La fusion via `Inventory.DropStack` est correcte mais on ne *voit* pas que la pile contient 5+ items. À régler avec un worldspace TMP label.
 - **Edit-mode preview des WorldItems** : depuis Session 4, ils apparaissent en gris dans l'éditeur (le tint via MPB se fait au Play). Acceptable, mais si gênant : remettre une création d'asset Material par couleur.
@@ -491,3 +570,7 @@ Cycle de test rapide : Add stone_axe (debug) → clic sur arbre → unité s'y r
 - **Multi-tools acceptés** par Harvestable : un seul outil requis. Quand on aura plusieurs paliers (hache bronze, hache fer), passer à `List<ItemData> AcceptedTools`.
 - **Pas d'anim de récolte** : l'unité reste figée pendant qu'elle "frappe". Visuellement médiocre, fonctionnellement correct.
 - **Fishing spot collider inflated** : la box collider/obstacle est verticale à 2m pour bloquer la bake, alors que le visuel est plat. Click acceptable, mais sémantiquement c'est un "mur invisible au-dessus de l'eau".
+- **Pas d'UI worldspace pour les stations de craft** : tout passe par le debug panel F1. Post-MVP, double-clic sur Workbench ouvrira un panneau de recettes filtrées.
+- **Armes craftées dorment dans l'inventaire** : `spear_stone`, `sword_stone`, etc. ne servent à rien tant que Combat (Module 5) et Equipment (Module 6) ne sont pas livrés. Volontaire — on n'a pas voulu attendre.
+- **Pas de multi-outputs stochastiques** : chaque recette produit exactement ses Outputs déclarés. À étendre via `RecipeDefinition.OutputRoll` si besoin.
+- **Pas d'anim de craft** : l'unité reste figée comme pour Harvest. `LookAt` cosmétique uniquement.

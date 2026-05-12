@@ -38,6 +38,7 @@ namespace Project.EditorTools
         const string MarkerPrefabPath = PrefabsDir + "/OrderMarker.prefab";
         const string QueuedMarkerPrefabPath = PrefabsDir + "/OrderMarker_Queued.prefab";
         const string WorldItemGenericPath = PrefabsDir + "/WorldItem_Generic.prefab";
+        const string WorkbenchPrefabPath = PrefabsDir + "/Workbench.prefab";
         const string XPCurvePath = SkillsSODir + "/DefaultXPCurve.asset";
         const string ItemDatabasePath = SODir + "/ItemDatabase.asset";
 
@@ -59,14 +60,13 @@ namespace Project.EditorTools
             var itemDatabase = CreateOrUpdateItemDatabase(items);
             var harvestables = CreateOrUpdateHarvestableDefinitions(itemDatabase);
             var recipes = CreateOrUpdateRecipeDefinitions(itemDatabase);
-            // Database asset is created/refreshed on disk; the local ref is
-            // not needed until commit 2 wires it into the debug panel.
-            CreateOrUpdateRecipeDatabase(recipes);
+            var recipeDatabase = CreateOrUpdateRecipeDatabase(recipes);
 
             var unitPrefab = BuildUnitPrefab(bodyParts, xpCurve);
             var markerPrefab = BuildOrderMarkerPrefab();
             var queuedMarkerPrefab = BuildQueuedOrderMarkerPrefab();
             var worldItemGenericPrefab = BuildWorldItemGenericPrefab();
+            var workbenchPrefab = BuildWorkbenchPrefab();
 
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
 
@@ -80,6 +80,9 @@ namespace Project.EditorTools
             // spots — units will path around them.
             SpawnInitialHarvestables(harvestables);
 
+            // Crafting stations are static obstacles too. Spawn before bake.
+            SpawnInitialCraftingStations(workbenchPrefab);
+
             // Bake after all static obstacles are in place. Done before the
             // unit instantiates so its NavMeshAgent has a surface to snap to.
             BakeNavMesh(ground);
@@ -88,7 +91,7 @@ namespace Project.EditorTools
             unitInstance.transform.position = Vector3.zero;
             unitInstance.name = "Unit";
 
-            BuildGameSystems(unitInstance.GetComponent<Unit>(), cam, markerPrefab, queuedMarkerPrefab, worldItemGenericPrefab, itemDatabase);
+            BuildGameSystems(unitInstance.GetComponent<Unit>(), cam, markerPrefab, queuedMarkerPrefab, worldItemGenericPrefab, itemDatabase, recipeDatabase);
 
             // Sprinkle a few loot piles for pickup testing. Done in edit
             // mode without going through WorldItem.Spawn (which relies on
@@ -258,6 +261,35 @@ namespace Project.EditorTools
             return prefab;
         }
 
+        static GameObject BuildWorkbenchPrefab()
+        {
+            // Light-brown cube ~1.2m wide. Houses the CraftingStation MB +
+            // a BoxCollider (raycast targets) + a NavMeshObstacle that
+            // Awake will configure with carving.
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            go.name = "Workbench";
+            go.transform.localScale = new Vector3(1.2f, 1.0f, 1.2f);
+
+            // BoxCollider already there (from CreatePrimitive). Make sure it
+            // stays solid (raycast hits, navmesh excludes).
+            var col = go.GetComponent<BoxCollider>();
+            if (col != null) col.isTrigger = false;
+
+            var renderer = go.GetComponent<Renderer>();
+            renderer.sharedMaterial = CreateOrUpdateMaterial(
+                ProjectRoot + "/Art/Mat_Workbench.mat",
+                new Color(0.72f, 0.55f, 0.32f));
+
+            var station = go.AddComponent<CraftingStation>();
+            station.Type = CraftStationType.Workbench;
+            station.DisplayName = "Workbench";
+            station.InteractionRange = 1.8f;
+
+            var prefab = PrefabUtility.SaveAsPrefabAsset(go, WorkbenchPrefabPath);
+            Object.DestroyImmediate(go);
+            return prefab;
+        }
+
         static GameObject BuildWorldItemGenericPrefab()
         {
             // Tiny cube used as the fallback world body for items without a
@@ -382,7 +414,7 @@ namespace Project.EditorTools
             return cam;
         }
 
-        static GameObject BuildGameSystems(Unit unit, Camera cam, GameObject markerPrefab, GameObject queuedMarkerPrefab, GameObject worldItemGenericPrefab, ItemDatabase itemDatabase)
+        static GameObject BuildGameSystems(Unit unit, Camera cam, GameObject markerPrefab, GameObject queuedMarkerPrefab, GameObject worldItemGenericPrefab, ItemDatabase itemDatabase, RecipeDatabase recipeDatabase)
         {
             var go = new GameObject("GameSystems");
             go.AddComponent<GameTimeService>();
@@ -410,9 +442,24 @@ namespace Project.EditorTools
             var healthDebugSO = new SerializedObject(healthDebug);
             healthDebugSO.FindProperty("watchedUnit").objectReferenceValue = unit;
             healthDebugSO.FindProperty("itemDatabase").objectReferenceValue = itemDatabase;
+            healthDebugSO.FindProperty("recipeDatabase").objectReferenceValue = recipeDatabase;
             healthDebugSO.ApplyModifiedPropertiesWithoutUndo();
 
             return go;
+        }
+
+        // ---- Initial crafting stations ----
+
+        static void SpawnInitialCraftingStations(GameObject workbenchPrefab)
+        {
+            if (workbenchPrefab == null) return;
+
+            // Single Workbench for the MVP, placed in a clear pocket of the
+            // play area between the unit spawn and the south-west obstacle.
+            var parent = new GameObject("CraftingStations");
+            var instance = (GameObject)PrefabUtility.InstantiatePrefab(workbenchPrefab);
+            instance.transform.position = new Vector3(-5f, 0.5f, 0f);
+            instance.transform.SetParent(parent.transform, true);
         }
 
         // ---- Initial world items ----

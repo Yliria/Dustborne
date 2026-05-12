@@ -1,7 +1,10 @@
 using System;
+using Project.Crafting;
+using Project.Crafting.Orders;
 using Project.Harvesting;
 using Project.Health;
 using Project.Items;
+using Project.PlayerInput;
 using Project.Skills;
 using Project.Units;
 using UnityEngine;
@@ -21,6 +24,7 @@ namespace Project.DebugUI
     {
         [SerializeField] Unit watchedUnit;
         [SerializeField] ItemDatabase itemDatabase;
+        [SerializeField] RecipeDatabase recipeDatabase;
         [SerializeField] bool startVisible = false;
         [SerializeField] float panelWidth = 540f;
 
@@ -32,6 +36,8 @@ namespace Project.DebugUI
         Vector2 _scroll;
         bool _inventoryFolded;
         bool _harvestablesFolded = true;
+        bool _craftingFolded = true;
+        bool _craftingShowOnlyAvailable;
 
         Texture2D _whiteTex;
         GUIStyle _header;
@@ -116,6 +122,8 @@ namespace Project.DebugUI
             DrawInventory();
             GUILayout.Space(8);
             DrawHarvestables();
+            GUILayout.Space(8);
+            DrawCrafting();
             GUILayout.Space(8);
             DrawGlobalActions();
 
@@ -345,6 +353,107 @@ namespace Project.DebugUI
                     if (nodes[i] != null) nodes[i].DebugRestoreToFull();
                 }
             }
+        }
+
+        // ---- Crafting ----
+
+        void DrawCrafting()
+        {
+            if (recipeDatabase == null || _inventory == null)
+            {
+                GUILayout.Label("<b>CRAFTING</b>  <i>(no RecipeDatabase or Inventory on unit)</i>", _header);
+                return;
+            }
+
+            int total = recipeDatabase.AllRecipes.Count;
+            int craftable = 0;
+            for (int i = 0; i < total; i++)
+            {
+                if (IsRecipeCraftable(recipeDatabase.AllRecipes[i])) craftable++;
+            }
+
+            string activeInfo = "";
+            if (watchedUnit != null && watchedUnit.Orders != null && watchedUnit.Orders.Current is CraftOrder activeCraft && activeCraft.Recipe != null)
+            {
+                activeInfo = $"  — <color=#ffd060>crafting <b>{activeCraft.Recipe.DisplayName}</b> {activeCraft.ProgressRatio * 100f:0}%</color>";
+            }
+
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button(_craftingFolded ? "▶" : "▼", GUILayout.Width(22f), GUILayout.Height(20f)))
+                _craftingFolded = !_craftingFolded;
+            GUILayout.Label($"<b>CRAFTING</b>  ({craftable}/{total} available){activeInfo}", _header);
+            GUILayout.EndHorizontal();
+
+            if (_craftingFolded) return;
+
+            _craftingShowOnlyAvailable = GUILayout.Toggle(_craftingShowOnlyAvailable, "  Show only craftable now");
+            GUILayout.Space(4);
+
+            for (int i = 0; i < total; i++)
+            {
+                var r = recipeDatabase.AllRecipes[i];
+                if (r == null) continue;
+                bool craftableNow = IsRecipeCraftable(r);
+                if (_craftingShowOnlyAvailable && !craftableNow) continue;
+                DrawRecipeRow(r, craftableNow);
+            }
+        }
+
+        bool IsRecipeCraftable(RecipeDefinition r)
+        {
+            if (r == null || _inventory == null) return false;
+            for (int i = 0; i < r.Inputs.Count; i++)
+            {
+                var input = r.Inputs[i];
+                if (input == null || input.Def == null) continue;
+                if (!_inventory.Has(input.Def, input.Quantity)) return false;
+            }
+            if (r.RequiredStation.HasValue && !CraftingStation.AnyAvailable(r.RequiredStation.Value))
+                return false;
+            return true;
+        }
+
+        void DrawRecipeRow(RecipeDefinition r, bool craftableNow)
+        {
+            string inputs = JoinStacks(r.Inputs);
+            string outputs = JoinStacks(r.Outputs);
+            string station = r.RequiredStation.HasValue ? r.RequiredStation.Value.ToString() : "hand";
+
+            var rect = GUILayoutUtility.GetRect(0f, 0f, GUILayout.ExpandWidth(true), GUILayout.Height(44f));
+
+            string colorOpen = craftableNow ? "" : "<color=#888888>";
+            string colorClose = craftableNow ? "" : "</color>";
+
+            var top = new Rect(rect.x + 4f, rect.y + 2f, rect.width - 86f, 18f);
+            GUI.Label(top, $"{colorOpen}<b>{r.DisplayName}</b>   <i>{r.BaseCraftTime:0.0}s · {station} · +{r.XPGainAmount:0} {r.XPGainSkill} XP</i>{colorClose}", _row);
+
+            var bottom = new Rect(rect.x + 4f, rect.y + 22f, rect.width - 86f, 18f);
+            GUI.Label(bottom, $"{colorOpen}{inputs} <b>→</b> {outputs}{colorClose}", _smallRich);
+
+            var btn = new Rect(rect.x + rect.width - 82f, rect.y + 10f, 78f, 24f);
+            GUI.enabled = craftableNow && watchedUnit != null;
+            if (GUI.Button(btn, "Craft"))
+            {
+                bool append = PlayerInputController.IsShiftHeld();
+                watchedUnit.IssueOrder(new CraftOrder(r), append);
+            }
+            GUI.enabled = true;
+        }
+
+        static string JoinStacks(System.Collections.Generic.List<ItemStack> stacks)
+        {
+            if (stacks == null || stacks.Count == 0) return "(none)";
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < stacks.Count; i++)
+            {
+                if (i > 0) sb.Append(", ");
+                var s = stacks[i];
+                if (s == null || s.Def == null) { sb.Append("?"); continue; }
+                sb.Append(s.Def.DisplayName);
+                sb.Append("×");
+                sb.Append(s.Quantity);
+            }
+            return sb.ToString();
         }
 
         void SpawnDebugItemsNearUnit()
