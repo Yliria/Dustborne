@@ -1,0 +1,27 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9c3ba272901a2204eb173bd5bfae5776, type: 3}
+  m_Name: BodyPart_LegLeft
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Health.BodyPartDefinition
+  Id: 5
+  DisplayName: Left Leg
+  IsVital: 0
+  CanBeSevered: 1
+  BaseMaxHP: 70
+  WoundedThreshold: 0.7
+  BrokenThreshold: 0.25
+  BleedingHPThreshold: 0.5
+  BleedRateWounded: 0.5
+  BleedRateBroken: 1.5
+  BleedRateSevered: 3
+  MoveSpeedPenaltyIfBroken: 0.3
+  MoveSpeedPenaltyIfSevered: 0.7
