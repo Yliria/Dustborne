@@ -6,15 +6,53 @@ namespace Project.Items
     /// quantity, and is destroyed by PickupOrder once an Inventory absorbs it.
     /// The collider is required so PlayerInputController's raycast can detect
     /// the click on it.
+    ///
+    /// Tinting (for items without a bespoke WorldPrefab) goes through a cached
+    /// MaterialPropertyBlock so we never clone the source material. Awake
+    /// applies the tint based on Def.FallbackColor, which means scene-baked
+    /// WorldItems (placed by MVPSceneSetup) get coloured at play start without
+    /// the editor having to create per-instance material assets.
     [DisallowMultipleComponent]
     public class WorldItem : MonoBehaviour
     {
         public ItemData Def;
         [Min(1)] public int Quantity = 1;
 
+        static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
+        static readonly int LegacyColorId = Shader.PropertyToID("_Color");
+
+        MaterialPropertyBlock _mpb;
+
+        void Awake()
+        {
+            ApplyVisualTint();
+        }
+
+        /// Applies Def.FallbackColor via MaterialPropertyBlock on every
+        /// renderer in this hierarchy. No-op if Def is null or if the item
+        /// uses a bespoke WorldPrefab (which is expected to have authored
+        /// materials and doesn't need fallback tinting).
+        public void ApplyVisualTint()
+        {
+            if (Def == null) return;
+            if (Def.WorldPrefab != null) return;
+
+            if (_mpb == null) _mpb = new MaterialPropertyBlock();
+
+            var renderers = GetComponentsInChildren<Renderer>();
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                var r = renderers[i];
+                r.GetPropertyBlock(_mpb);
+                _mpb.SetColor(BaseColorId, Def.FallbackColor);
+                _mpb.SetColor(LegacyColorId, Def.FallbackColor);
+                r.SetPropertyBlock(_mpb);
+            }
+        }
+
         /// Factory: instantiates a custom WorldPrefab when the ItemData
-        /// provides one, otherwise the generic prefab tinted with FallbackColor.
-        /// Returns the WorldItem component on the spawned GameObject.
+        /// provides one, otherwise the generic prefab. Tinting goes through
+        /// MaterialPropertyBlock — the source material is never cloned.
         public static WorldItem Spawn(ItemData def, int qty, Vector3 position)
         {
             if (def == null)
@@ -24,7 +62,6 @@ namespace Project.Items
             }
 
             GameObject go;
-            bool tintFromFallback = false;
             if (def.WorldPrefab != null)
             {
                 go = Object.Instantiate(def.WorldPrefab, position, Quaternion.identity);
@@ -37,7 +74,6 @@ namespace Project.Items
                     return null;
                 }
                 go = Object.Instantiate(WorldItemService.GenericPrefab, position, Quaternion.identity);
-                tintFromFallback = true;
             }
 
             go.name = $"WorldItem_{def.Id}_x{qty}";
@@ -47,24 +83,11 @@ namespace Project.Items
             wi.Def = def;
             wi.Quantity = Mathf.Max(1, qty);
 
-            if (tintFromFallback) ApplyFallbackTint(go, def.FallbackColor);
+            // Awake already ran during Instantiate, so re-tint explicitly with
+            // the now-assigned Def.
+            wi.ApplyVisualTint();
 
             return wi;
-        }
-
-        static void ApplyFallbackTint(GameObject go, Color color)
-        {
-            var renderers = go.GetComponentsInChildren<Renderer>();
-            for (int i = 0; i < renderers.Length; i++)
-            {
-                var r = renderers[i];
-                // Use a per-instance material so the shared asset isn't
-                // permanently recoloured.
-                var mat = new Material(r.sharedMaterial);
-                mat.color = color;
-                if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", color);
-                r.sharedMaterial = mat;
-            }
         }
     }
 }

@@ -23,6 +23,8 @@ namespace Project.Items
         [SerializeField, Min(0.2f)] float dropForwardDistance = 1.0f;
         [Tooltip("Vertical position of dropped WorldItems (cube sits with its base at ground).")]
         [SerializeField] float dropHeight = 0.15f;
+        [Tooltip("If a WorldItem with the same Def is already within this radius of the drop position, the new drop merges into it instead of spawning a duplicate.")]
+        [SerializeField, Min(0f)] float dropMergeRadius = 1.5f;
 
         [SerializeField] List<ItemStack> stacks = new();
 
@@ -146,8 +148,13 @@ namespace Project.Items
             RaiseChanged();
         }
 
-        /// Spawns a WorldItem near the unit with the requested quantity.
-        /// Returns the number of units actually dropped.
+        /// Spawns a WorldItem near the unit with the requested quantity. If a
+        /// WorldItem with the same Def already sits within dropMergeRadius
+        /// of the drop position, the new quantity is merged into it instead
+        /// of spawning a duplicate. Note: the visual cube does not display
+        /// its quantity, so merges are only readable in the Inspector or via
+        /// the debug panel — acceptable for MVP, addressable with a worldspace
+        /// label later.
         public int DropStack(int stackIndex, int quantity)
         {
             if (stackIndex < 0 || stackIndex >= stacks.Count) return 0;
@@ -158,12 +165,32 @@ namespace Project.Items
             if (qtyToDrop <= 0) return 0;
 
             Vector3 pos = ComputeDropPosition();
-            WorldItem.Spawn(stack.Def, qtyToDrop, pos);
+            if (!TryMergeIntoNearbyWorldItem(pos, stack.Def, qtyToDrop))
+            {
+                WorldItem.Spawn(stack.Def, qtyToDrop, pos);
+            }
 
             stack.Quantity -= qtyToDrop;
             if (stack.Quantity <= 0) stacks.RemoveAt(stackIndex);
             RaiseChanged();
             return qtyToDrop;
+        }
+
+        bool TryMergeIntoNearbyWorldItem(Vector3 pos, ItemData def, int qty)
+        {
+            if (def == null || qty <= 0 || dropMergeRadius <= 0f) return false;
+            var hits = Physics.OverlapSphere(pos, dropMergeRadius, ~0, QueryTriggerInteraction.Collide);
+            for (int i = 0; i < hits.Length; i++)
+            {
+                var wi = hits[i].GetComponentInParent<WorldItem>();
+                if (wi != null && wi.Def == def)
+                {
+                    wi.Quantity += qty;
+                    wi.name = $"WorldItem_{wi.Def.Id}_x{wi.Quantity}";
+                    return true;
+                }
+            }
+            return false;
         }
 
         Vector3 ComputeDropPosition()

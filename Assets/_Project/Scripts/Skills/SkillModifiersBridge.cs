@@ -1,15 +1,16 @@
 using System.Collections.Generic;
-using Project.Core;
 using Project.Health;
 using Project.Items;
-using Project.Units;
 using UnityEngine;
 using UnityEngine.AI;
 
 namespace Project.Skills
 {
-    /// The only place that knows about HealthSystem + SkillSystem + Inventory.
-    /// All cross-domain wiring lives here:
+    /// Event-driven cross-domain wiring between HealthSystem, SkillSystem,
+    /// and Inventory. The bridge owns the immediate-response logic; per-frame
+    /// trickle XP (movement, overweight training) lives in PassiveXPHooks.
+    ///
+    /// Responsibilities:
     ///   - Speed/Vitality level-ups → push new agent.speed
     ///   - Strength level-ups       → push new BonusMaxWeight into Inventory
     ///   - Vitality level-ups       → push new vitality multiplier into Health,
@@ -18,25 +19,14 @@ namespace Project.Skills
     ///   - Health part state change → recompute move speed
     ///   - Inventory weight change  → recompute move speed (load penalty)
     ///   - Damage taken             → Vitality XP for defender, Str/Dex for attacker
-    ///   - Movement                 → Speed XP (trickle)
-    ///   - Movement + overweight    → Strength XP (trickle)
     [DisallowMultipleComponent]
     [RequireComponent(typeof(HealthSystem))]
     [RequireComponent(typeof(SkillSystem))]
     public class SkillModifiersBridge : MonoBehaviour
     {
-        [Header("Speed XP from movement")]
-        [Tooltip("Speed XP per second gained while the unit is moving (velocity > threshold).")]
-        [SerializeField, Min(0f)] float speedXPPerSecondMoving = 0.1f;
-        [SerializeField, Min(0f)] float movementVelocityThreshold = 0.1f;
-
         [Header("Vitality XP from damage taken")]
         [Tooltip("Multiplier applied to DamageInfo.Amount when granting Vitality XP to the defender.")]
         [SerializeField, Min(0f)] float vitalityXPPerDamage = 1.0f;
-
-        [Header("Strength XP from carrying overweight")]
-        [Tooltip("Strength XP per second gained while moving with an overweight inventory.")]
-        [SerializeField, Min(0f)] float overweightStrengthXPPerSecond = 0.15f;
 
         [Header("Weight speed penalty curve")]
         [Tooltip("No penalty below this weight ratio.")]
@@ -48,7 +38,6 @@ namespace Project.Skills
         [Tooltip("Minimum speed multiplier no matter how overweight.")]
         [SerializeField, Range(0f, 1f)] float weightPenaltyFloor = 0.15f;
 
-        Unit _unit;
         HealthSystem _health;
         SkillSystem _skills;
         Inventory _inventory;
@@ -61,7 +50,6 @@ namespace Project.Skills
 
         void Awake()
         {
-            _unit = GetComponent<Unit>();
             _health = GetComponent<HealthSystem>();
             _skills = GetComponent<SkillSystem>();
             _inventory = GetComponent<Inventory>();
@@ -95,23 +83,9 @@ namespace Project.Skills
             if (_inventory != null) _inventory.OnWeightChanged -= HandleWeightChanged;
         }
 
-        void Update()
-        {
-            float dt = GameTime.DeltaTime;
-            if (dt <= 0f || _agent == null) return;
-
-            bool moving = _agent.velocity.sqrMagnitude > movementVelocityThreshold * movementVelocityThreshold;
-            if (!moving) return;
-
-            _skills.GainXP(SkillType.Speed, speedXPPerSecondMoving * dt);
-
-            // Overweight Strength training — only while actually moving under
-            // the load, not while standing still.
-            if (_inventory != null && _inventory.IsOverweight)
-            {
-                _skills.GainXP(SkillType.Strength, overweightStrengthXPPerSecond * dt);
-            }
-        }
+        // Per-frame trickle XP (Speed from moving, Strength from overweight
+        // movement) is handled by PassiveXPHooks. The bridge stays purely
+        // event-driven now.
 
         // ---- Event handlers ----
 

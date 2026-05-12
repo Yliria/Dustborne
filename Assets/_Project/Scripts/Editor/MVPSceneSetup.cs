@@ -187,6 +187,10 @@ namespace Project.EditorTools
             // Bridge between Health, Skills and Inventory (must come after all of them).
             go.AddComponent<SkillModifiersBridge>();
 
+            // Passive XP hooks (Speed from movement, Strength from overweight
+            // movement). Split out of the bridge for separation of concerns.
+            go.AddComponent<PassiveXPHooks>();
+
             var prefab = PrefabUtility.SaveAsPrefabAsset(go, UnitPrefabPath);
             Object.DestroyImmediate(go);
             return prefab;
@@ -422,7 +426,6 @@ namespace Project.EditorTools
                 }
 
                 var sourcePrefab = def.WorldPrefab != null ? def.WorldPrefab : genericPrefab;
-                bool tint = def.WorldPrefab == null;
 
                 var go = (GameObject)PrefabUtility.InstantiatePrefab(sourcePrefab);
                 go.transform.position = s.pos;
@@ -434,22 +437,11 @@ namespace Project.EditorTools
                 wi.Def = def;
                 wi.Quantity = s.qty;
 
-                if (tint) ApplyEditorFallbackTint(go, def.FallbackColor);
-            }
-        }
-
-        static void ApplyEditorFallbackTint(GameObject go, Color color)
-        {
-            // Embedded scene materials — fine for 5 items, avoids creating
-            // an asset per colour variant. Mirrors what WorldItem.Spawn does
-            // at runtime.
-            var renderers = go.GetComponentsInChildren<Renderer>();
-            for (int i = 0; i < renderers.Length; i++)
-            {
-                var r = renderers[i];
-                var mat = new Material(r.sharedMaterial) { color = color };
-                if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", color);
-                r.sharedMaterial = mat;
+                // No editor-time tint anymore: WorldItem.Awake re-applies the
+                // FallbackColor via MaterialPropertyBlock at Play start, so the
+                // scene file stays clean (no per-instance embedded material).
+                // Edit-mode preview shows the generic grey cube — acceptable
+                // trade-off for a cleaner asset graph.
             }
         }
 

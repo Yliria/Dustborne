@@ -77,8 +77,17 @@ namespace Project.Skills
         /// over level-ups. No-op during pause — XP is gameplay state, the
         /// player should not progress in stopped time.
         public void GainXP(SkillType type, float baseAmount)
+            => GainXPInternal(type, baseAmount, respectPause: true);
+
+        /// Diagnostic / debug entry point used by the debug panel. Skips the
+        /// pause guard so testers can train skills while looking at the
+        /// frozen world.
+        public void GainXPIgnoringPause(SkillType type, float baseAmount)
+            => GainXPInternal(type, baseAmount, respectPause: false);
+
+        void GainXPInternal(SkillType type, float baseAmount, bool respectPause)
         {
-            if (GameTime.IsPaused) return;
+            if (respectPause && GameTime.IsPaused) return;
             if (baseAmount <= 0f) return;
             var s = Get(type);
             if (s == null) return;
@@ -102,37 +111,6 @@ namespace Project.Skills
 
             OnXPGained?.Invoke(type, effective);
             if (newLevel > oldLevel) OnLevelUp?.Invoke(type, oldLevel, newLevel);
-        }
-
-        /// Diagnostic / debug entry point used by the debug panel. Skips the
-        /// pause guard so testers can train skills while looking at the
-        /// frozen world.
-        public void GainXPIgnoringPause(SkillType type, float baseAmount)
-        {
-            bool wasPaused = GameTime.IsPaused;
-            // Use the same logic without the pause early-return.
-            if (baseAmount <= 0f) return;
-            var s = Get(type);
-            if (s == null) return;
-
-            float mult = curve != null ? curve.GetGainMultiplier(s.Level) : 1f;
-            float effective = baseAmount * mult;
-            if (effective <= 0f) return;
-
-            int oldLevel = s.LevelInt;
-            s.XPCurrent += effective;
-            while (true)
-            {
-                float xpForNext = curve != null ? curve.GetXPForNext(s.Level) : 100f;
-                if (s.XPCurrent < xpForNext) break;
-                s.XPCurrent -= xpForNext;
-                s.Level += 1f;
-            }
-            int newLevel = s.LevelInt;
-
-            OnXPGained?.Invoke(type, effective);
-            if (newLevel > oldLevel) OnLevelUp?.Invoke(type, oldLevel, newLevel);
-            _ = wasPaused;
         }
 
         public void ResetAllSkills()
