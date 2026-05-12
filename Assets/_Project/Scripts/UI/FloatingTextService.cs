@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace Project.UI
 {
@@ -109,6 +110,62 @@ namespace Project.UI
         public static void SpawnInfo(string message, Vector3 worldPos)
         {
             Spawn(message, worldPos, InfoColor);
+        }
+
+        // ---- Mouse-anchored overloads ----
+        // Spawn toasts at the world-space projection of the current mouse
+        // cursor onto the ground plane (y = 0). Used by every "the player
+        // just did something" hook — feedback appears where they were
+        // looking instead of above the unit body.
+
+        public static void SpawnAtMouse(string text, Color color, float duration = -1f)
+        {
+            if (TryGetMouseGroundPosition(out Vector3 pos))
+                Spawn(text, pos, color, duration);
+        }
+
+        public static void SpawnPickupAtMouse(string itemName, int quantity)
+        {
+            if (TryGetMouseGroundPosition(out Vector3 pos))
+                SpawnPickup(itemName, quantity, pos);
+        }
+
+        public static void SpawnErrorAtMouse(string message)
+        {
+            if (TryGetMouseGroundPosition(out Vector3 pos))
+                SpawnError(message, pos);
+        }
+
+        public static void SpawnInfoAtMouse(string message)
+        {
+            if (TryGetMouseGroundPosition(out Vector3 pos))
+                SpawnInfo(message, pos);
+        }
+
+        /// Projects the cursor through Camera.main onto the y=0 ground plane.
+        /// Silent false-returns: no main camera, no mouse device, or the ray
+        /// misses the plane (camera below the floor — shouldn't happen in
+        /// normal play). Static so it's reusable from outside the service.
+        public static bool TryGetMouseGroundPosition(out Vector3 worldPos)
+        {
+            worldPos = Vector3.zero;
+            var cam = Camera.main;
+            if (cam == null) return false;
+            var mouse = Mouse.current;
+            if (mouse == null) return false;
+
+            var screenPos = mouse.position.ReadValue();
+            var ray = cam.ScreenPointToRay(screenPos);
+
+            // Plane intersection on the ground (y = 0). More predictable
+            // than Physics.Raycast since it ignores stacked colliders and
+            // always returns a point even when the cursor is over an
+            // obstacle's top face.
+            var ground = new Plane(Vector3.up, Vector3.zero);
+            if (!ground.Raycast(ray, out float enter)) return false;
+
+            worldPos = ray.GetPoint(enter);
+            return true;
         }
 
         // ---- Tick & render ----

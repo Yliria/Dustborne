@@ -61,9 +61,8 @@ namespace Project.Harvesting.Orders
                 if (_inventory == null || !_inventory.Has(_target.Def.RequiredTool, 1))
                 {
                     Debug.LogWarning($"[HarvestOrder] Tool required: {_target.Def.RequiredTool.Id} — order failed.");
-                    FloatingTextService.SpawnError(
-                        $"Tool required: {_target.Def.RequiredTool.DisplayName}",
-                        unit.transform.position + Vector3.up * 2f);
+                    FloatingTextService.SpawnErrorAtMouse(
+                        $"Tool required: {_target.Def.RequiredTool.DisplayName}");
                     _failedAtStart = true;
                     return;
                 }

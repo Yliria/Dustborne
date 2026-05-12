@@ -74,17 +74,12 @@ namespace Project.Items.Orders
             if (inv != null && _target.Def != null)
             {
                 inv.Add(_target.Def, _target.Quantity);
-                FloatingTextService.SpawnPickup(
-                    _target.Def.DisplayName,
-                    _target.Quantity,
-                    unit.transform.position + Vector3.up * 2f);
+                FloatingTextService.SpawnPickupAtMouse(_target.Def.DisplayName, _target.Quantity);
             }
             else if (inv == null)
             {
                 Debug.LogWarning($"[PickupOrder] {unit.name} has no Inventory — WorldItem destroyed without storage.");
-                FloatingTextService.SpawnError(
-                    "No inventory",
-                    unit.transform.position + Vector3.up * 2f);
+                FloatingTextService.SpawnErrorAtMouse("No inventory");
             }
             Object.Destroy(_target.gameObject);
         }

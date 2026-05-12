@@ -523,7 +523,7 @@ Cycle de test "from scratch to crossbow" :
 3. Va devant le Workbench (clic Craft Spear Stone) → l'unité s'y rend, 6s de progress → spear_stone produit, +10 XP Labour. Inputs (wood_log×2 + stone_chunk×1) retirés.
 4. Add Labour XP via debug → temps de craft visiblement réduit sur la recette suivante.
 
-**Feedback visuel** : `FloatingTextService` (sur GameSystems) affiche des toasts world-anchored au-dessus de l'unité :
+**Feedback visuel** : `FloatingTextService` (sur GameSystems) affiche des toasts world-anchored **à la position du curseur souris projeté sur le plan sol** :
 - Pickup réussi → vert, `+N <Item>` (ex: `+3 Wood Log`).
 - Output de craft → vert (idem, un par output).
 - Outil manquant (harvest) → rouge, `Tool required: <Item>`.
@@ -531,7 +531,12 @@ Cycle de test "from scratch to crossbow" :
 - Pas de station (craft) → rouge, `No Workbench found`.
 - Inputs disparus pendant un craft → rouge, `Inputs lost: <Item> ×N`.
 
-Les toasts utilisent `Time.unscaledTime` — ils continuent d'animer/fader même pendant la pause (UI pure, hors gameplay clock). Rendu via OnGUI (pas de prefab/Canvas/TMP — IMGUI suffit au scale actuel).
+API :
+- `SpawnAtMouse / SpawnPickupAtMouse / SpawnErrorAtMouse / SpawnInfoAtMouse` — projection auto curseur → plan y=0 (utilisé par tous les hooks actuels).
+- `Spawn / SpawnPickup / SpawnError / SpawnInfo` (avec `Vector3 worldPos`) — pour des futures sources (dégâts à l'emplacement d'un hit, etc.).
+- `TryGetMouseGroundPosition(out worldPos)` — helper public exposé si d'autres systèmes veulent le même anchor.
+
+Les toasts utilisent `Time.unscaledTime` — ils continuent d'animer/fader même pendant la pause (UI pure, hors gameplay clock). Rendu via OnGUI (pas de prefab/Canvas/TMP — IMGUI suffit au scale actuel). Si le curseur est hors monde (camera null, raycast manque le plan), le toast est silencieusement skip.
 
 ---
 
