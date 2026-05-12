@@ -37,6 +37,7 @@ namespace Project.Health
         public event Action<DamageInfo> OnDamageTaken;
         public event Action<BodyPartId, BodyPartState, BodyPartState> OnPartStateChanged;
         public event Action OnDeath;
+        public event Action OnRevived;
 
         Unit _unit;
 
@@ -159,6 +160,26 @@ namespace Project.Health
             var part = GetPart(id);
             if (part == null) return;
             part.Bandage();
+        }
+
+        /// Resets the unit to a fully healthy state. Severed parts come back
+        /// (deliberate choice for the MVP — testing-friendly; if we ever want
+        /// permadeath / permanent loss we add a flag here). Keeps the current
+        /// Vitality multiplier so capacity reflects skill level.
+        public void Revive()
+        {
+            IsDead = false;
+            foreach (var p in Parts)
+            {
+                if (p.Def == null) continue;
+                p.IsBandaged = false;
+                p.CurrentHP = p.Def.BaseMaxHP * VitalityMultiplier;
+                p.Recompute(VitalityMultiplier);
+                // Recompute infers Healthy state, which auto-clears bleeding.
+            }
+            Blood.Initialize(VitalityMultiplier);
+            if (_unit != null && _unit.Agent != null && _unit.Agent.isOnNavMesh) _unit.Agent.isStopped = false;
+            OnRevived?.Invoke();
         }
 
         /// Aggregate locomotion penalty from broken/severed parts. Currently

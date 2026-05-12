@@ -1,21 +1,25 @@
 using System.Collections.Generic;
 using Project.Core;
 using Project.Health;
+using Project.Items;
 using Project.Units;
 using UnityEngine;
 using UnityEngine.AI;
 
 namespace Project.Skills
 {
-    /// The only place that knows about BOTH HealthSystem and SkillSystem.
+    /// The only place that knows about HealthSystem + SkillSystem + Inventory.
     /// All cross-domain wiring lives here:
     ///   - Speed/Vitality level-ups → push new agent.speed
-    ///   - Vitality level-ups → push new vitality multiplier into Health,
-    ///     preserving HP and blood ratios so leveling is "more capacity"
-    ///     not "free heal"
-    ///   - Health part state changes → recompute move speed
-    ///   - Damage taken → grant Vitality XP to defender + attacker XP via SkillSystem
-    ///   - Movement → trickle Speed XP
+    ///   - Strength level-ups       → push new BonusMaxWeight into Inventory
+    ///   - Vitality level-ups       → push new vitality multiplier into Health,
+    ///                                preserving HP and blood ratios so leveling
+    ///                                is "more capacity" not "free heal"
+    ///   - Health part state change → recompute move speed
+    ///   - Inventory weight change  → recompute move speed (load penalty)
+    ///   - Damage taken             → Vitality XP for defender, Str/Dex for attacker
+    ///   - Movement                 → Speed XP (trickle)
+    ///   - Movement + overweight    → Strength XP (trickle)
     [DisallowMultipleComponent]
     [RequireComponent(typeof(HealthSystem))]
     [RequireComponent(typeof(SkillSystem))]
@@ -30,9 +34,24 @@ namespace Project.Skills
         [Tooltip("Multiplier applied to DamageInfo.Amount when granting Vitality XP to the defender.")]
         [SerializeField, Min(0f)] float vitalityXPPerDamage = 1.0f;
 
+        [Header("Strength XP from carrying overweight")]
+        [Tooltip("Strength XP per second gained while moving with an overweight inventory.")]
+        [SerializeField, Min(0f)] float overweightStrengthXPPerSecond = 0.15f;
+
+        [Header("Weight speed penalty curve")]
+        [Tooltip("No penalty below this weight ratio.")]
+        [SerializeField, Range(0f, 1f)] float weightPenaltyStartRatio = 0.75f;
+        [Tooltip("Speed multiplier at full load (ratio = 1.0).")]
+        [SerializeField, Range(0f, 1f)] float weightPenaltyAtFullLoad = 0.7f;
+        [Tooltip("Slope of additional penalty per unit of overweight beyond ratio 1.0.")]
+        [SerializeField, Min(0f)] float weightPenaltyOverloadSlope = 0.4f;
+        [Tooltip("Minimum speed multiplier no matter how overweight.")]
+        [SerializeField, Range(0f, 1f)] float weightPenaltyFloor = 0.15f;
+
         Unit _unit;
         HealthSystem _health;
         SkillSystem _skills;
+        Inventory _inventory;
         NavMeshAgent _agent;
 
         float _baseAgentSpeed;
@@ -45,6 +64,7 @@ namespace Project.Skills
             _unit = GetComponent<Unit>();
             _health = GetComponent<HealthSystem>();
             _skills = GetComponent<SkillSystem>();
+            _inventory = GetComponent<Inventory>();
             _agent = GetComponent<NavMeshAgent>();
         }
 
@@ -52,9 +72,9 @@ namespace Project.Skills
         {
             if (_agent != null) _baseAgentSpeed = _agent.speed;
 
-            // Push the starting vitality multiplier into Health so Parts and
-            // Blood get the right max (still 1.0 at L1 by formula, but this
-            // is correct for any starting level — e.g. loaded save).
+            // Initial propagation: push starting Strength bonus into Inventory,
+            // starting Vitality multiplier into Health, then compute speed.
+            if (_inventory != null) _inventory.SetMaxWeightBonus(_skills.GetMaxCarryWeightBonus());
             ApplyVitalityMultiplier(preserveRatios: false);
             RecomputeMoveSpeed();
         }
@@ -64,6 +84,7 @@ namespace Project.Skills
             _skills.OnLevelUp += HandleLevelUp;
             _health.OnPartStateChanged += HandlePartStateChanged;
             _health.OnDamageTaken += HandleDamageTaken;
+            if (_inventory != null) _inventory.OnWeightChanged += HandleWeightChanged;
         }
 
         void OnDisable()
@@ -71,16 +92,24 @@ namespace Project.Skills
             _skills.OnLevelUp -= HandleLevelUp;
             _health.OnPartStateChanged -= HandlePartStateChanged;
             _health.OnDamageTaken -= HandleDamageTaken;
+            if (_inventory != null) _inventory.OnWeightChanged -= HandleWeightChanged;
         }
 
         void Update()
         {
-            // Speed XP trickle while moving. GameTime.DeltaTime gates pause.
             float dt = GameTime.DeltaTime;
             if (dt <= 0f || _agent == null) return;
-            if (_agent.velocity.sqrMagnitude > movementVelocityThreshold * movementVelocityThreshold)
+
+            bool moving = _agent.velocity.sqrMagnitude > movementVelocityThreshold * movementVelocityThreshold;
+            if (!moving) return;
+
+            _skills.GainXP(SkillType.Speed, speedXPPerSecondMoving * dt);
+
+            // Overweight Strength training — only while actually moving under
+            // the load, not while standing still.
+            if (_inventory != null && _inventory.IsOverweight)
             {
-                _skills.GainXP(SkillType.Speed, speedXPPerSecondMoving * dt);
+                _skills.GainXP(SkillType.Strength, overweightStrengthXPPerSecond * dt);
             }
         }
 
@@ -91,6 +120,12 @@ namespace Project.Skills
             if (type == SkillType.Vitality)
             {
                 ApplyVitalityMultiplier(preserveRatios: true);
+            }
+            if (type == SkillType.Strength && _inventory != null)
+            {
+                _inventory.SetMaxWeightBonus(_skills.GetMaxCarryWeightBonus());
+                // SetMaxWeightBonus fires OnWeightChanged which already calls
+                // RecomputeMoveSpeed. No need to call it again here.
             }
             if (type == SkillType.Speed || type == SkillType.Vitality)
             {
@@ -103,13 +138,17 @@ namespace Project.Skills
             RecomputeMoveSpeed();
         }
 
+        void HandleWeightChanged(float currentWeight)
+        {
+            RecomputeMoveSpeed();
+        }
+
         void HandleDamageTaken(DamageInfo info)
         {
             // Defender trains Vitality from absorbed punishment.
             _skills.GainXP(SkillType.Vitality, info.Amount * vitalityXPPerDamage);
 
             // Attacker trains Strength / Dexterity based on weapon category.
-            // Skip if attacker is this unit (shouldn't happen, but cheap to guard).
             if (info.Attacker != null && info.Attacker.gameObject != gameObject)
             {
                 SkillSystem.GrantAttackerXP(info.Attacker, info);
@@ -123,7 +162,28 @@ namespace Project.Skills
             if (_agent == null) return;
             float skillMult = _skills.GetMoveSpeedMult();
             float healthMult = _health.GetMoveSpeedMultiplier();
-            _agent.speed = _baseAgentSpeed * skillMult * healthMult;
+            float weightMult = GetWeightSpeedMultiplier();
+            _agent.speed = _baseAgentSpeed * skillMult * healthMult * weightMult;
+        }
+
+        public float GetWeightSpeedMultiplier()
+        {
+            if (_inventory == null) return 1f;
+            float ratio = _inventory.WeightRatio;
+
+            if (ratio <= weightPenaltyStartRatio) return 1f;
+
+            if (ratio <= 1f)
+            {
+                // Lerp from 1.0 at weightPenaltyStartRatio to weightPenaltyAtFullLoad at 1.0.
+                float span = 1f - weightPenaltyStartRatio;
+                float t = span > 0f ? (ratio - weightPenaltyStartRatio) / span : 1f;
+                return Mathf.Lerp(1f, weightPenaltyAtFullLoad, t);
+            }
+
+            // Over capacity: linear punishment past full load, clamped.
+            return Mathf.Max(weightPenaltyFloor,
+                             weightPenaltyAtFullLoad - (ratio - 1f) * weightPenaltyOverloadSlope);
         }
 
         // ---- Vitality pipeline ----

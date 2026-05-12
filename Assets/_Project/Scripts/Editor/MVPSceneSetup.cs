@@ -4,6 +4,7 @@ using Project.CameraRig;
 using Project.Core;
 using Project.DebugUI;
 using Project.Health;
+using Project.Items;
 using Project.PlayerInput;
 using Project.Skills;
 using Project.Units;
@@ -26,11 +27,14 @@ namespace Project.EditorTools
         const string SODir = ProjectRoot + "/ScriptableObjects";
         const string BodyPartsDir = SODir + "/BodyParts";
         const string SkillsSODir = SODir + "/Skills";
+        const string ItemsSODir = SODir + "/Items";
         const string ScenePath = ScenesDir + "/MVP.unity";
         const string UnitPrefabPath = PrefabsDir + "/Unit.prefab";
         const string MarkerPrefabPath = PrefabsDir + "/OrderMarker.prefab";
         const string QueuedMarkerPrefabPath = PrefabsDir + "/OrderMarker_Queued.prefab";
+        const string WorldItemGenericPath = PrefabsDir + "/WorldItem_Generic.prefab";
         const string XPCurvePath = SkillsSODir + "/DefaultXPCurve.asset";
+        const string ItemDatabasePath = SODir + "/ItemDatabase.asset";
 
         [MenuItem("Tools/RTS MVP/Build Scene And Prefabs")]
         public static void Build()
@@ -39,14 +43,18 @@ namespace Project.EditorTools
             EnsureFolder(ScenesDir);
             EnsureFolder(BodyPartsDir);
             EnsureFolder(SkillsSODir);
+            EnsureFolder(ItemsSODir);
 
             // ScriptableObject data first — prefabs reference these.
             var bodyParts = CreateOrUpdateBodyPartDefinitions();
             var xpCurve = CreateOrUpdateXPCurve();
+            var items = CreateOrUpdateItemData();
+            var itemDatabase = CreateOrUpdateItemDatabase(items);
 
             var unitPrefab = BuildUnitPrefab(bodyParts, xpCurve);
             var markerPrefab = BuildOrderMarkerPrefab();
             var queuedMarkerPrefab = BuildQueuedOrderMarkerPrefab();
+            var worldItemGenericPrefab = BuildWorldItemGenericPrefab();
 
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
 
@@ -63,7 +71,12 @@ namespace Project.EditorTools
             unitInstance.transform.position = Vector3.zero;
             unitInstance.name = "Unit";
 
-            BuildGameSystems(unitInstance.GetComponent<Unit>(), cam, markerPrefab, queuedMarkerPrefab);
+            BuildGameSystems(unitInstance.GetComponent<Unit>(), cam, markerPrefab, queuedMarkerPrefab, worldItemGenericPrefab, itemDatabase);
+
+            // Sprinkle a few loot piles for pickup testing. Done in edit
+            // mode without going through WorldItem.Spawn (which relies on
+            // WorldItemService's static, populated only at Play time).
+            SpawnInitialWorldItems(itemDatabase, worldItemGenericPrefab);
 
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene, ScenePath);
@@ -164,7 +177,14 @@ namespace Project.EditorTools
             }
             skillsSO.ApplyModifiedPropertiesWithoutUndo();
 
-            // Bridge between Health and Skills (must come after both).
+            // Inventory: weight-based, default 30 kg capacity. Strength bonus
+            // is pushed in by the bridge (Inventory has no ref to SkillSystem).
+            var inventory = go.AddComponent<Inventory>();
+            var invSO = new SerializedObject(inventory);
+            invSO.FindProperty("baseMaxWeight").floatValue = 30f;
+            invSO.ApplyModifiedPropertiesWithoutUndo();
+
+            // Bridge between Health, Skills and Inventory (must come after all of them).
             go.AddComponent<SkillModifiersBridge>();
 
             var prefab = PrefabUtility.SaveAsPrefabAsset(go, UnitPrefabPath);
@@ -213,6 +233,33 @@ namespace Project.EditorTools
                 emissive: true);
 
             var prefab = PrefabUtility.SaveAsPrefabAsset(go, QueuedMarkerPrefabPath);
+            Object.DestroyImmediate(go);
+            return prefab;
+        }
+
+        static GameObject BuildWorldItemGenericPrefab()
+        {
+            // Tiny cube used as the fallback world body for items without a
+            // bespoke WorldPrefab. The WorldItem component is on the root so
+            // Inventory.DropStack and PickupOrder can find it via raycast hit
+            // GetComponentInParent.
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            go.name = "WorldItem_Generic";
+            go.transform.localScale = Vector3.one * 0.3f;
+
+            // Box collider is auto-added by CreatePrimitive — make sure it's
+            // sized to the new scale and NOT a trigger (raycast must hit it).
+            var col = go.GetComponent<BoxCollider>();
+            if (col != null) col.isTrigger = false;
+
+            var renderer = go.GetComponent<Renderer>();
+            renderer.sharedMaterial = CreateOrUpdateMaterial(
+                ProjectRoot + "/Art/Mat_WorldItem_Generic.mat",
+                new Color(0.7f, 0.7f, 0.7f));
+
+            go.AddComponent<WorldItem>();
+
+            var prefab = PrefabUtility.SaveAsPrefabAsset(go, WorldItemGenericPath);
             Object.DestroyImmediate(go);
             return prefab;
         }
@@ -314,10 +361,16 @@ namespace Project.EditorTools
             return cam;
         }
 
-        static GameObject BuildGameSystems(Unit unit, Camera cam, GameObject markerPrefab, GameObject queuedMarkerPrefab)
+        static GameObject BuildGameSystems(Unit unit, Camera cam, GameObject markerPrefab, GameObject queuedMarkerPrefab, GameObject worldItemGenericPrefab, ItemDatabase itemDatabase)
         {
             var go = new GameObject("GameSystems");
             go.AddComponent<GameTimeService>();
+
+            // Expose the generic WorldItem prefab to WorldItem.Spawn (static).
+            var worldItemService = go.AddComponent<WorldItemService>();
+            var wisSO = new SerializedObject(worldItemService);
+            wisSO.FindProperty("genericPrefab").objectReferenceValue = worldItemGenericPrefab;
+            wisSO.ApplyModifiedPropertiesWithoutUndo();
 
             var debugUI = go.AddComponent<GameTimeDebugUI>();
             var debugSO = new SerializedObject(debugUI);
@@ -335,9 +388,69 @@ namespace Project.EditorTools
             var healthDebug = go.AddComponent<HealthSkillsDebugPanel>();
             var healthDebugSO = new SerializedObject(healthDebug);
             healthDebugSO.FindProperty("watchedUnit").objectReferenceValue = unit;
+            healthDebugSO.FindProperty("itemDatabase").objectReferenceValue = itemDatabase;
             healthDebugSO.ApplyModifiedPropertiesWithoutUndo();
 
             return go;
+        }
+
+        // ---- Initial world items ----
+
+        static void SpawnInitialWorldItems(ItemDatabase db, GameObject genericPrefab)
+        {
+            if (db == null || genericPrefab == null) return;
+
+            // (def id, qty, position) — fixed positions known clear of obstacles.
+            var spawns = new (string id, int qty, Vector3 pos)[]
+            {
+                ("branch",          3, new Vector3( 3f,  0.15f,  5f)),
+                ("branch",          5, new Vector3(-2f,  0.15f,  6f)),
+                ("stone",           4, new Vector3( 4f,  0.15f, -2f)),
+                ("stone",           2, new Vector3(-2f,  0.15f, -1f)),
+                ("test_rock_10kg",  1, new Vector3( 0f,  0.15f,  4f)),
+            };
+
+            var parent = new GameObject("WorldItems");
+
+            foreach (var s in spawns)
+            {
+                var def = db.GetById(s.id);
+                if (def == null)
+                {
+                    Debug.LogWarning($"[MVPSceneSetup] Missing item id '{s.id}' in ItemDatabase — skipping spawn.");
+                    continue;
+                }
+
+                var sourcePrefab = def.WorldPrefab != null ? def.WorldPrefab : genericPrefab;
+                bool tint = def.WorldPrefab == null;
+
+                var go = (GameObject)PrefabUtility.InstantiatePrefab(sourcePrefab);
+                go.transform.position = s.pos;
+                go.name = $"WorldItem_{def.Id}_x{s.qty}";
+                go.transform.SetParent(parent.transform, true);
+
+                var wi = go.GetComponent<WorldItem>();
+                if (wi == null) wi = go.AddComponent<WorldItem>();
+                wi.Def = def;
+                wi.Quantity = s.qty;
+
+                if (tint) ApplyEditorFallbackTint(go, def.FallbackColor);
+            }
+        }
+
+        static void ApplyEditorFallbackTint(GameObject go, Color color)
+        {
+            // Embedded scene materials — fine for 5 items, avoids creating
+            // an asset per colour variant. Mirrors what WorldItem.Spawn does
+            // at runtime.
+            var renderers = go.GetComponentsInChildren<Renderer>();
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                var r = renderers[i];
+                var mat = new Material(r.sharedMaterial) { color = color };
+                if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", color);
+                r.sharedMaterial = mat;
+            }
         }
 
         static void BakeNavMesh(GameObject ground)
@@ -527,6 +640,84 @@ namespace Project.EditorTools
         static void SmoothCurveTangents(AnimationCurve c)
         {
             for (int i = 0; i < c.length; i++) c.SmoothTangents(i, 0f);
+        }
+
+        // ---- Items & database ----
+
+        readonly struct ItemSeed
+        {
+            public readonly string Id;
+            public readonly string Name;
+            public readonly ItemType Type;
+            public readonly float Weight;
+            public readonly bool Stackable;
+            public readonly int MaxStack;
+            public readonly Color Color;
+            public ItemSeed(string id, string name, ItemType type, float weight, bool stackable, int maxStack, Color color)
+            {
+                Id = id; Name = name; Type = type; Weight = weight;
+                Stackable = stackable; MaxStack = maxStack; Color = color;
+            }
+        }
+
+        static List<ItemData> CreateOrUpdateItemData()
+        {
+            EnsureFolder(ItemsSODir);
+
+            var seeds = new[]
+            {
+                new ItemSeed("branch",            "Branche",            ItemType.Resource,   0.5f, true,  50, new Color(0.45f, 0.30f, 0.15f)),
+                new ItemSeed("stone",             "Caillou",            ItemType.Resource,   1.5f, true,  30, new Color(0.55f, 0.55f, 0.55f)),
+                new ItemSeed("wood_log",          "Bûche",              ItemType.Resource,   2.5f, true,  20, new Color(0.30f, 0.20f, 0.10f)),
+                new ItemSeed("stone_chunk",       "Pierre brute",       ItemType.Resource,   3.0f, true,  15, new Color(0.30f, 0.30f, 0.30f)),
+                new ItemSeed("fish_small",        "Petit poisson",      ItemType.Resource,   0.8f, true,  20, new Color(0.85f, 0.85f, 0.90f)),
+                new ItemSeed("stone_axe",         "Hache en pierre",    ItemType.Tool,       3.0f, false, 1,  new Color(0.75f, 0.62f, 0.42f)),
+                new ItemSeed("stone_pickaxe",     "Pioche en pierre",   ItemType.Tool,       3.5f, false, 1,  new Color(0.70f, 0.58f, 0.40f)),
+                new ItemSeed("fishing_rod",       "Canne à pêche",      ItemType.Tool,       1.0f, false, 1,  new Color(0.55f, 0.35f, 0.20f)),
+                new ItemSeed("test_rock_10kg",   "Gros caillou (test)", ItemType.Misc,      10.0f, false, 1,  new Color(0.80f, 0.20f, 0.20f)),
+                new ItemSeed("test_boulder_50kg","Bloc lourd (test)",   ItemType.Misc,      50.0f, false, 1,  new Color(0.60f, 0.10f, 0.10f)),
+            };
+
+            var list = new List<ItemData>(seeds.Length);
+            foreach (var seed in seeds)
+            {
+                string path = $"{ItemsSODir}/Item_{seed.Id}.asset";
+                var asset = AssetDatabase.LoadAssetAtPath<ItemData>(path);
+                if (asset == null)
+                {
+                    asset = ScriptableObject.CreateInstance<ItemData>();
+                    AssetDatabase.CreateAsset(asset, path);
+                }
+
+                asset.Id = seed.Id;
+                asset.DisplayName = seed.Name;
+                asset.Type = seed.Type;
+                asset.Weight = seed.Weight;
+                asset.Stackable = seed.Stackable;
+                asset.MaxStackSize = seed.Stackable ? Mathf.Max(1, seed.MaxStack) : 1;
+                asset.FallbackColor = seed.Color;
+                // WorldPrefab left null — generic prefab handles all MVP items.
+
+                EditorUtility.SetDirty(asset);
+                list.Add(asset);
+            }
+            return list;
+        }
+
+        static ItemDatabase CreateOrUpdateItemDatabase(List<ItemData> items)
+        {
+            EnsureFolder(SODir);
+
+            var db = AssetDatabase.LoadAssetAtPath<ItemDatabase>(ItemDatabasePath);
+            if (db == null)
+            {
+                db = ScriptableObject.CreateInstance<ItemDatabase>();
+                AssetDatabase.CreateAsset(db, ItemDatabasePath);
+            }
+
+            db.EditorReplaceAll(items);
+            EditorUtility.SetDirty(db);
+            return db;
         }
     }
 }

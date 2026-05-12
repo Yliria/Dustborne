@@ -1,4 +1,6 @@
 using Project.Core;
+using Project.Items;
+using Project.Items.Orders;
 using Project.Units;
 using Project.Units.Orders;
 using UnityEngine;
@@ -65,6 +67,16 @@ namespace Project.PlayerInput
             bool append = false;
             var kb = Keyboard.current;
             if (kb != null) append = kb.leftShiftKey.isPressed || kb.rightShiftKey.isPressed;
+
+            // Interactable targets take precedence over raw ground moves.
+            // Component check (no layer required) — the raycast already hit
+            // the WorldItem's collider since it's closer than the ground.
+            var worldItem = hit.collider != null ? hit.collider.GetComponentInParent<WorldItem>() : null;
+            if (worldItem != null)
+            {
+                unit.IssueOrder(new PickupOrder(worldItem), append);
+                return;
+            }
 
             GameObject prefab = append && queuedMoveMarkerPrefab != null
                 ? queuedMoveMarkerPrefab
