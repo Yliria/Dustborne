@@ -133,13 +133,49 @@ namespace Project.Health
             part.CurrentHP = Mathf.Max(0f, part.CurrentHP - Mathf.Max(0f, info.Amount));
             part.Recompute(VitalityMultiplier);
 
-            if (oldState != part.State) OnPartStateChanged?.Invoke(part.Def.Id, oldState, part.State);
+            if (oldState != part.State)
+            {
+                OnPartStateChanged?.Invoke(part.Def.Id, oldState, part.State);
+                // Anatomical cascade: severing an arm tears off the hand, etc.
+                if (part.State == BodyPartState.Severed) CascadeSevered(part);
+            }
 
             OnDamageTaken?.Invoke(info);
 
             if (part.Def.IsVital && part.CurrentHP <= 0f)
             {
                 SetDead();
+            }
+        }
+
+        /// Walks Def.SeveredChildren and forces each living child to Severed.
+        /// Recursive — if a child has its own SeveredChildren they cascade too.
+        /// The `state != Severed` guard at every step makes infinite loops
+        /// impossible even if someone wires a cycle in the SO graph.
+        void CascadeSevered(BodyPartHealth severedPart)
+        {
+            if (severedPart == null || severedPart.Def == null) return;
+            var children = severedPart.Def.SeveredChildren;
+            if (children == null) return;
+
+            for (int i = 0; i < children.Count; i++)
+            {
+                var child = GetPart(children[i]);
+                if (child == null) continue;
+                if (child.State == BodyPartState.Severed) continue; // already gone, no loop
+
+                var oldChildState = child.State;
+                child.CurrentHP = 0f;
+                child.Recompute(VitalityMultiplier);
+
+                if (oldChildState != child.State)
+                {
+                    OnPartStateChanged?.Invoke(child.Def.Id, oldChildState, child.State);
+                }
+
+                // If the child itself has SeveredChildren (rare today, planned
+                // future-proof), keep cascading.
+                if (child.State == BodyPartState.Severed) CascadeSevered(child);
             }
         }
 
@@ -172,35 +208,57 @@ namespace Project.Health
             foreach (var p in Parts)
             {
                 if (p.Def == null) continue;
+                var oldState = p.State;
                 p.IsBandaged = false;
                 p.CurrentHP = p.Def.BaseMaxHP * VitalityMultiplier;
                 p.Recompute(VitalityMultiplier);
                 // Recompute infers Healthy state, which auto-clears bleeding.
+                // Fire the transition so visual subscribers (BodyPartVisual,
+                // future HUD) can refresh from Severed/Broken back to Healthy.
+                if (oldState != p.State)
+                {
+                    OnPartStateChanged?.Invoke(p.Def.Id, oldState, p.State);
+                }
             }
             Blood.Initialize(VitalityMultiplier);
             if (_unit != null && _unit.Agent != null && _unit.Agent.isOnNavMesh) _unit.Agent.isStopped = false;
             OnRevived?.Invoke();
         }
 
-        /// Aggregate locomotion penalty from broken/severed parts. Currently
-        /// only legs contribute (Arms have penalty=0 in their definitions),
-        /// but the formula is anatomically agnostic — any part with a penalty
-        /// affects speed. Penalties are additive and clamped to [0, 1].
+        /// Locomotion penalty: multiplicative product over leg + foot parts.
+        /// Each affected part multiplies by (1 - penalty), so two
+        /// independently-injured limbs compound naturally and even fully
+        /// severed limbs can't drive the multiplier strictly to zero (the
+        /// unit becomes glacial, not paralysed — design choice from the
+        /// session brief). Hands intentionally have zero penalty in their
+        /// definition; they'll matter for equipment slots in Module 6+.
         public float GetMoveSpeedMultiplier()
         {
             if (IsDead) return 0f;
-            float penalty = 0f;
+            float mult = 1f;
             for (int i = 0; i < Parts.Count; i++)
             {
                 var p = Parts[i];
                 if (p.Def == null) continue;
+                if (!AffectsMobility(p.Def.Id)) continue;
+
                 switch (p.State)
                 {
-                    case BodyPartState.Broken: penalty += p.Def.MoveSpeedPenaltyIfBroken; break;
-                    case BodyPartState.Severed: penalty += p.Def.MoveSpeedPenaltyIfSevered; break;
+                    case BodyPartState.Broken:
+                        mult *= (1f - p.Def.MoveSpeedPenaltyIfBroken);
+                        break;
+                    case BodyPartState.Severed:
+                        mult *= (1f - p.Def.MoveSpeedPenaltyIfSevered);
+                        break;
                 }
             }
-            return Mathf.Clamp01(1f - penalty);
+            return Mathf.Max(mult, 0f);
+        }
+
+        static bool AffectsMobility(BodyPartId id)
+        {
+            return id == BodyPartId.LegLeft || id == BodyPartId.LegRight
+                || id == BodyPartId.FootLeft || id == BodyPartId.FootRight;
         }
 
         // ---- Bridge hooks ----

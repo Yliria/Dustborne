@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace Project.Health
@@ -38,10 +39,14 @@ namespace Project.Health
         [Tooltip("Blood drained per second while Severed. Only used if CanBeSevered.")]
         [Min(0f)] public float BleedRateSevered = 3f;
 
-        [Header("Locomotion penalties (additive, clamped to [0,1])")]
-        [Tooltip("Speed multiplier subtracted when this part is Broken.")]
+        [Header("Locomotion penalties (multiplicative on leg/foot only)")]
+        [Tooltip("Fraction of max speed removed when this part is Broken. mult *= (1 - value).")]
         [Range(0f, 1f)] public float MoveSpeedPenaltyIfBroken = 0f;
-        [Tooltip("Speed multiplier subtracted when this part is Severed.")]
+        [Tooltip("Fraction of max speed removed when this part is Severed. mult *= (1 - value).")]
         [Range(0f, 1f)] public float MoveSpeedPenaltyIfSevered = 0f;
+
+        [Header("Anatomical cascade")]
+        [Tooltip("Body parts that automatically transition to Severed when this part becomes Severed (e.g. ArmLeft → [HandLeft]). HealthSystem walks this list recursively when applying damage that severs the parent.")]
+        public List<BodyPartId> SeveredChildren = new();
     }
 }

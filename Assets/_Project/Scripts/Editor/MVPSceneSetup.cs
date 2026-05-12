@@ -596,22 +596,41 @@ namespace Project.EditorTools
 
         // ---- ScriptableObject seeders ----
 
-        /// Returns the 7 BodyPartDefinitions in canonical BodyPartId order.
-        /// Creates the assets on first run, refreshes default values on
-        /// subsequent runs (without touching the Id field of existing ones).
+        /// Returns the 11 BodyPartDefinitions in canonical BodyPartId order
+        /// (Head, Torso, Abdomen, Arms, Legs, Hands, Feet). Creates the assets
+        /// on first run, refreshes default values on subsequent runs.
+        /// SeveredChildren wires the anatomical cascade: severing an arm/leg
+        /// auto-severs the corresponding hand/foot.
         static List<BodyPartDefinition> CreateOrUpdateBodyPartDefinitions()
         {
             EnsureFolder(BodyPartsDir);
 
             var defaults = new[]
             {
-                new BodyPartSeed(BodyPartId.Head,     "Head",      vital: true,  severable: false, hp: 60f,  brokenPenalty: 0f,   severedPenalty: 0f),
-                new BodyPartSeed(BodyPartId.Torso,    "Torso",     vital: true,  severable: false, hp: 100f, brokenPenalty: 0f,   severedPenalty: 0f),
-                new BodyPartSeed(BodyPartId.Abdomen,  "Abdomen",   vital: false, severable: false, hp: 80f,  brokenPenalty: 0f,   severedPenalty: 0f),
-                new BodyPartSeed(BodyPartId.ArmLeft,  "Left Arm",  vital: false, severable: true,  hp: 50f,  brokenPenalty: 0f,   severedPenalty: 0f),
-                new BodyPartSeed(BodyPartId.ArmRight, "Right Arm", vital: false, severable: true,  hp: 50f,  brokenPenalty: 0f,   severedPenalty: 0f),
-                new BodyPartSeed(BodyPartId.LegLeft,  "Left Leg",  vital: false, severable: true,  hp: 70f,  brokenPenalty: 0.3f, severedPenalty: 0.7f),
-                new BodyPartSeed(BodyPartId.LegRight, "Right Leg", vital: false, severable: true,  hp: 70f,  brokenPenalty: 0.3f, severedPenalty: 0.7f),
+                new BodyPartSeed(BodyPartId.Head,      "Head",       vital: true,  severable: false, hp: 60f,  brokenPenalty: 0f,    severedPenalty: 0f),
+                new BodyPartSeed(BodyPartId.Torso,     "Torso",      vital: true,  severable: false, hp: 100f, brokenPenalty: 0f,    severedPenalty: 0f),
+                new BodyPartSeed(BodyPartId.Abdomen,   "Abdomen",    vital: false, severable: false, hp: 80f,  brokenPenalty: 0f,    severedPenalty: 0f),
+
+                new BodyPartSeed(BodyPartId.ArmLeft,   "Left Arm",   vital: false, severable: true,  hp: 50f,  brokenPenalty: 0f,    severedPenalty: 0f,
+                    severedChildren: new[] { BodyPartId.HandLeft }),
+                new BodyPartSeed(BodyPartId.ArmRight,  "Right Arm",  vital: false, severable: true,  hp: 50f,  brokenPenalty: 0f,    severedPenalty: 0f,
+                    severedChildren: new[] { BodyPartId.HandRight }),
+
+                new BodyPartSeed(BodyPartId.LegLeft,   "Left Leg",   vital: false, severable: true,  hp: 70f,  brokenPenalty: 0.30f, severedPenalty: 0.70f,
+                    severedChildren: new[] { BodyPartId.FootLeft }),
+                new BodyPartSeed(BodyPartId.LegRight,  "Right Leg",  vital: false, severable: true,  hp: 70f,  brokenPenalty: 0.30f, severedPenalty: 0.70f,
+                    severedChildren: new[] { BodyPartId.FootRight }),
+
+                // Session 5.5 — hands & feet as first-class parts.
+                new BodyPartSeed(BodyPartId.HandLeft,  "Left Hand",  vital: false, severable: true,  hp: 25f,  brokenPenalty: 0f,    severedPenalty: 0f,
+                    bleedWounded: 0.3f, bleedBroken: 1.0f, bleedSevered: 2.0f),
+                new BodyPartSeed(BodyPartId.HandRight, "Right Hand", vital: false, severable: true,  hp: 25f,  brokenPenalty: 0f,    severedPenalty: 0f,
+                    bleedWounded: 0.3f, bleedBroken: 1.0f, bleedSevered: 2.0f),
+
+                new BodyPartSeed(BodyPartId.FootLeft,  "Left Foot",  vital: false, severable: true,  hp: 30f,  brokenPenalty: 0.15f, severedPenalty: 0.50f,
+                    bleedWounded: 0.4f, bleedBroken: 1.2f, bleedSevered: 2.5f),
+                new BodyPartSeed(BodyPartId.FootRight, "Right Foot", vital: false, severable: true,  hp: 30f,  brokenPenalty: 0.15f, severedPenalty: 0.50f,
+                    bleedWounded: 0.4f, bleedBroken: 1.2f, bleedSevered: 2.5f),
             };
 
             var list = new List<BodyPartDefinition>(defaults.Length);
@@ -633,11 +652,14 @@ namespace Project.EditorTools
                 asset.WoundedThreshold = 0.7f;
                 asset.BrokenThreshold = 0.25f;
                 asset.BleedingHPThreshold = 0.5f;
-                asset.BleedRateWounded = 0.5f;
-                asset.BleedRateBroken = 1.5f;
-                asset.BleedRateSevered = seed.Severable ? 3f : 0f;
+                asset.BleedRateWounded = seed.BleedWounded;
+                asset.BleedRateBroken = seed.BleedBroken;
+                asset.BleedRateSevered = seed.Severable ? seed.BleedSevered : 0f;
                 asset.MoveSpeedPenaltyIfBroken = seed.BrokenPenalty;
                 asset.MoveSpeedPenaltyIfSevered = seed.SeveredPenalty;
+                asset.SeveredChildren = seed.SeveredChildren != null
+                    ? new List<BodyPartId>(seed.SeveredChildren)
+                    : new List<BodyPartId>();
 
                 EditorUtility.SetDirty(asset);
                 list.Add(asset);
@@ -655,10 +677,22 @@ namespace Project.EditorTools
             public readonly float HP;
             public readonly float BrokenPenalty;
             public readonly float SeveredPenalty;
-            public BodyPartSeed(BodyPartId id, string name, bool vital, bool severable, float hp, float brokenPenalty, float severedPenalty)
+            public readonly float BleedWounded;
+            public readonly float BleedBroken;
+            public readonly float BleedSevered;
+            public readonly BodyPartId[] SeveredChildren;
+
+            public BodyPartSeed(
+                BodyPartId id, string name,
+                bool vital, bool severable, float hp,
+                float brokenPenalty, float severedPenalty,
+                float bleedWounded = 0.5f, float bleedBroken = 1.5f, float bleedSevered = 3f,
+                BodyPartId[] severedChildren = null)
             {
                 Id = id; Name = name; Vital = vital; Severable = severable;
                 HP = hp; BrokenPenalty = brokenPenalty; SeveredPenalty = severedPenalty;
+                BleedWounded = bleedWounded; BleedBroken = bleedBroken; BleedSevered = bleedSevered;
+                SeveredChildren = severedChildren;
             }
         }
 
