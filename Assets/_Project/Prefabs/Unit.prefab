@@ -21,6 +21,7 @@ GameObject:
   - component: {fileID: 2662271401956938042}
   - component: {fileID: 9061565031659133667}
   - component: {fileID: 4073016633680080522}
+  - component: {fileID: 2837676854683866162}
   m_Layer: 0
   m_Name: Unit
   m_TagString: Untagged
@@ -382,3 +383,16 @@ MonoBehaviour:
   loadStrengthXPPerSecondAtFull: 0.15
   loadStrengthThresholdMin: 0.1
   loadStrengthThresholdMax: 0.9
+--- !u!114 &2837676854683866162
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6584868055992020589}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4f44b101032a1ab44b959e4dc5c44863, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.UI.UnitFeedbackToasts
+  headHeight: 2

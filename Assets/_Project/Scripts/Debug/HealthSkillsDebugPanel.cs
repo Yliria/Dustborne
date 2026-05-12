@@ -143,10 +143,35 @@ namespace Project.DebugUI
         void DrawParts()
         {
             GUILayout.Label("<b>BODY PARTS</b>", _header);
-            foreach (var p in _health.Parts)
-            {
-                DrawPartRow(p);
-            }
+
+            // Grouped by anatomical zone — easier to scan with 11 parts than
+            // a flat list. Iterating fixed BodyPartId values (not _health.Parts)
+            // keeps the visual order stable even if the SO list order ever
+            // drifts.
+            GUILayout.Label("<color=#a8b4ff>── Vital ──</color>", _smallRich);
+            DrawPartById(BodyPartId.Head);
+            DrawPartById(BodyPartId.Torso);
+            DrawPartById(BodyPartId.Abdomen);
+
+            GUILayout.Space(2);
+            GUILayout.Label("<color=#a8e6c4>── Arms ──</color>", _smallRich);
+            DrawPartById(BodyPartId.ArmLeft);
+            DrawPartById(BodyPartId.HandLeft);
+            DrawPartById(BodyPartId.ArmRight);
+            DrawPartById(BodyPartId.HandRight);
+
+            GUILayout.Space(2);
+            GUILayout.Label("<color=#ffd9a8>── Legs ──</color>", _smallRich);
+            DrawPartById(BodyPartId.LegLeft);
+            DrawPartById(BodyPartId.FootLeft);
+            DrawPartById(BodyPartId.LegRight);
+            DrawPartById(BodyPartId.FootRight);
+        }
+
+        void DrawPartById(BodyPartId id)
+        {
+            var part = _health.GetPart(id);
+            if (part != null) DrawPartRow(part);
         }
 
         void DrawPartRow(BodyPartHealth p)

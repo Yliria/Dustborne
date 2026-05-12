@@ -1,4 +1,4 @@
-# Dustborne — Fondations + Santé/Sang + Skills + Items + Récolte + Crafting
+# Dustborne — Fondations + Santé/Sang + Skills + Items + Récolte + Crafting + Stickman
 
 Jeu RTS-like, vue de haut, **une unité** contrôlable par le joueur. Inspirations : Kenshi (pause active, compétences progressives, dégâts par parties du corps), Valheim/Rust (récolte → craft → armement). MVP : zone fixe, hand-crafted.
 
@@ -8,6 +8,7 @@ Sessions livrées :
 - **Session 3** — Items, Inventaire au poids, Pickup, intégration vitesse/XP, Revive.
 - **Session 4** — Dette technique (MPB, drop merge, dédup, extraction PassiveXPHooks) + Récolte (Harvestable, HarvestOrder, 9 noeuds en scène).
 - **Session 5** — Crafting (RecipeDefinition + RecipeDatabase + CraftingStation + CraftOrder, hand-craft & workbench, 9 recettes, 1 Workbench en scène, bandage + 5 armes placeholders).
+- **Session 5.5** — Stickman visuel (15 segments en primitives) + body parts étendues à 11 (mains + pieds), cascade Severed anatomique, BodyPartVisual avec MPB tinting.
 
 Tous les modules suivants se branchent dessus sans modifier ces fondations.
 
@@ -92,11 +93,15 @@ PassiveXPHooks (séparé du Bridge depuis Session 4) tient le tick :
 ## Module 1 — Santé & Sang
 
 ### Modèle
-- **7 parties** : `Head`, `Torso`, `Abdomen`, `ArmLeft`, `ArmRight`, `LegLeft`, `LegRight`.
+- **11 parties** depuis Session 5.5 : `Head`, `Torso`, `Abdomen`, `ArmLeft`, `ArmRight`, `LegLeft`, `LegRight`, `HandLeft`, `HandRight`, `FootLeft`, `FootRight`.
 - Chaque partie a des `BaseMaxHP`, un état (`Healthy`/`Wounded`/`Broken`/`Severed`) calculé depuis le ratio HP/Max, et peut **saigner** quand le ratio passe sous `BleedingHPThreshold`.
 - **Vitales** : `Head`, `Torso` → HP=0 = mort instantanée.
-- **Sécables** : 4 membres → HP=0 = `Severed` (état terminal, ne reçoit plus de damage, ne se heal pas).
+- **Sécables** : 8 membres (les 4 segments + 4 extrémités). HP=0 = `Severed` (état terminal, ne reçoit plus de damage, ne se heal pas hors Revive).
 - **Abdomen** : ni vital ni sécable, peut être `Broken` au max.
+- **Cascade anatomique** (Session 5.5) : un parent qui passe Severed force ses children à le devenir aussi. Mapping data-driven dans `BodyPartDefinition.SeveredChildren` :
+  - `ArmLeft → [HandLeft]`, `ArmRight → [HandRight]`
+  - `LegLeft → [FootLeft]`, `LegRight → [FootRight]`
+  - HealthSystem.CascadeSevered récursif natif ; guard `state != Severed` empêche tout cycle.
 
 ### Pool de sang
 - `BloodSystem` : pool global (100 base × Vitality multiplier).
@@ -113,7 +118,7 @@ PassiveXPHooks (séparé du Bridge depuis Session 4) tient le tick :
 HealthSystem.ApplyDamage(DamageInfo)
 HealthSystem.Heal(BodyPartId, float)
 HealthSystem.Bandage(BodyPartId)
-HealthSystem.GetMoveSpeedMultiplier()  // 1 - somme des pénalités jambes
+HealthSystem.GetMoveSpeedMultiplier()  // produit multiplicatif sur leg + foot
 HealthSystem.GetPart(BodyPartId)
 HealthSystem.IsDead
 
@@ -136,11 +141,35 @@ Helper `DamageInfo.Environmental(amount, type, part)` pour les sources sans atta
 - Severed = définitif, pas de regen (cohérence Kenshi-like).
 
 ### Penalty mouvement
-Chaque partie a `MoveSpeedPenaltyIfBroken` et `MoveSpeedPenaltyIfSevered`. Les jambes par défaut :
-- Broken → -0.3 (×0.7 vitesse)
-- Severed → -0.7 (×0.3 vitesse)
+Chaque partie a `MoveSpeedPenaltyIfBroken` et `MoveSpeedPenaltyIfSevered`. Valeurs par défaut :
+- Jambes (LegLeft/Right) : Broken → 0.30, Severed → 0.70
+- Pieds (FootLeft/Right) : Broken → 0.15, Severed → 0.50
+- Tout le reste (head, torso, abdomen, bras, mains) : 0.
 
-Les pénalités sont **additives** et clampées à `[0, 1]`. Sectionner les deux jambes (2 × 0.7 = 1.4 → clamp 0) = unité immobile.
+Depuis Session 5.5, le calcul est **multiplicatif** et gated sur leg + foot uniquement :
+
+```
+mult = 1
+pour chaque partie leg/foot : mult *= (1 - penalty)
+return max(mult, 0)
+```
+
+Ex : `LegLeft.Broken` (0.30) + `FootLeft.Broken` (0.15) = `0.70 × 0.85 = 0.595`. Les deux jambes + deux pieds Severed = `0.30 × 0.30 × 0.50 × 0.50 ≈ 0.0225` — l'unité devient glaciale mais jamais strictement à zéro. Les **mains** ont volontairement zéro pénalité ; elles serviront aux constraintes d'équipement en Module 6+.
+
+### Visual feedback (Session 5.5)
+- **Bonhomme stickman** : le prefab Unit a un enfant `Visual` contenant 15 segments en primitives Unity (head sphere, torso/abdomen cylinders, 3-segment arms × 2, 3-segment legs × 2). Pivot du Unit au sol (`NavMeshAgent.baseOffset = 0`).
+- **`BodyPartVisual`** (Project.Health) sur chaque segment renderable. Listen à `HealthSystem.OnPartStateChanged`, tint via `MaterialPropertyBlock` selon l'état :
+  - Healthy → beige peau de base
+  - Wounded → jaune teinté
+  - Broken → orange teinté
+  - Severed → rouge sombre **+ Renderer disabled** (le membre disparaît)
+- Plusieurs `BodyPartVisual` peuvent cibler le même `BodyPartId` (typique : upper-arm + forearm tous deux bindés à `ArmLeft`, retintés ensemble par le même event).
+- `HealthSystem.Revive()` fire `OnPartStateChanged` pour tous les parts qui transitent → les renderers re-enable et reprennent leur couleur.
+- **Pas de Material clone** : un seul `Mat_BodyPart.mat` partagé par les 15 segments ; MPB par instance.
+- **Pas de hit collider par part** : un `CapsuleCollider` englobant sur la racine du Unit suffit pour clic + pathfinding. Les hit colliders par part arrivent en Module 6 (Combat).
+
+### Menu de rebuild rapide
+`Tools → RTS MVP → Rebuild Unit Visual` régénère uniquement la hiérarchie `Visual` du prefab Unit (sans toucher aux components ou aux refs SO). Pratique pour itérer sur les proportions / couleurs.
 
 ---
 
@@ -368,14 +397,15 @@ Assets/_Project/
       Orders/                   Project.Units.Orders
         MoveOrder.cs
     Health/                     Project.Health
-      BodyPartId.cs             enum
+      BodyPartId.cs             enum (11 values)
       BodyPartState.cs          enum
       DamageType.cs / WeaponCategory.cs
       DamageInfo.cs             struct
-      BodyPartDefinition.cs     ScriptableObject
+      BodyPartDefinition.cs     ScriptableObject (incl. SeveredChildren cascade)
       BodyPartHealth.cs         runtime state
       BloodSystem.cs            runtime state
-      HealthSystem.cs           MonoBehaviour
+      HealthSystem.cs           MonoBehaviour (cascade + multiplicative mobility)
+      BodyPartVisual.cs         MPB tinter on each renderable segment
     Skills/                     Project.Skills
       SkillType.cs              enum
       SkillData.cs              runtime state
@@ -418,7 +448,7 @@ Assets/_Project/
     Editor/                     Project.EditorTools
       MVPSceneSetup.cs          Tools menu builder
   ScriptableObjects/
-    BodyParts/                  7 BodyPartDefinition assets
+    BodyParts/                  11 BodyPartDefinition assets (Head, Torso, Abdomen, ArmL/R, LegL/R, HandL/R, FootL/R)
     Skills/
       DefaultXPCurve.asset
     Items/                      16 ItemData assets (10 from S3 + 6 new in S5)
@@ -427,7 +457,7 @@ Assets/_Project/
     Recipes/                    9 RecipeDefinition assets
     RecipeDatabase.asset
   Prefabs/
-    Unit.prefab                 (Health / Skills / Inventory / Bridge / PassiveXPHooks)
+    Unit.prefab                 (Health / Skills / Inventory / Bridge / PassiveXPHooks / UnitFeedbackToasts + Visual stickman child with 15 BodyPartVisual segments)
     OrderMarker.prefab
     OrderMarker_Queued.prefab
     WorldItem_Generic.prefab    fallback world body (cube tinted via MPB)
@@ -565,6 +595,10 @@ Les toasts utilisent `Time.unscaledTime` — ils continuent d'animer/fader même
 - Pop-up de level up bloquant → **passif, juste event + UI update**.
 - `FindObjectOfType` répété en runtime → **cacher la ref (cf. `CraftingStation.ActiveStations` registry pattern)**.
 - UI worldspace pour interagir avec les stations → **post-MVP, le debug panel suffit pour l'instant**.
+- Hit colliders par body part → **réservé Module 6 Combat**. Pour l'instant un seul `CapsuleCollider` englobant sur la racine du Unit.
+- Cascade Severed inverse (HandLeft severed → ArmLeft severed) → **uniquement parent → child**, jamais l'inverse.
+- Modifier `NavMeshAgent.baseOffset` au runtime → **set à 0 une fois pour toutes dans le prefab**, les pieds sur le sol.
+- Cloner des Materials pour le bonhomme → **un seul `Mat_BodyPart.mat` partagé, MPB par renderer**.
 
 ---
 
@@ -595,3 +629,6 @@ Les toasts utilisent `Time.unscaledTime` — ils continuent d'animer/fader même
 - **Armes craftées dorment dans l'inventaire** : `spear_stone`, `sword_stone`, etc. ne servent à rien tant que Combat (Module 5) et Equipment (Module 6) ne sont pas livrés. Volontaire — on n'a pas voulu attendre.
 - **Pas de multi-outputs stochastiques** : chaque recette produit exactement ses Outputs déclarés. À étendre via `RecipeDefinition.OutputRoll` si besoin.
 - **Pas d'anim de craft** : l'unité reste figée comme pour Harvest. `LookAt` cosmétique uniquement.
+- **Stickman raide** : pas de rigging Mecanim, les bras pendent verticalement, les pieds ne pivotent pas. À reprendre avec un mesh rigged si on veut animer. La hiérarchie actuelle ne suit pas la convention humanoid Unity.
+- **Severed parts juste disabled** : les membres sectionnés sont invisibles, pas détachés physiquement. Pour un effet "membre qui tombe au sol" il faudrait re-parent + Rigidbody. Module 6+.
+- **Pas de hit colliders par part** : Module 6 (Combat). Pour l'instant un seul CapsuleCollider sur la racine, les dégâts sont dispatchés via `DamageInfo.TargetPart` par le caller (debug panel today, AttackOrder demain).

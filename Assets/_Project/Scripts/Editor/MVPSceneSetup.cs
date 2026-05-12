@@ -122,24 +122,26 @@ namespace Project.EditorTools
 
         static GameObject BuildUnitPrefab(List<BodyPartDefinition> bodyParts, XPCurve xpCurve)
         {
-            var go = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-            go.name = "Unit";
-            // Drop the default collider — NavMeshAgent handles avoidance.
-            Object.DestroyImmediate(go.GetComponent<Collider>());
+            // Pure-logic root: no MeshRenderer/MeshFilter (the visual lives
+            // in the "Visual" child built by BuildUnitVisual). A CapsuleCollider
+            // remains so PlayerInputController raycasts and physics queries
+            // still hit the unit.
+            var go = new GameObject("Unit");
 
-            var renderer = go.GetComponent<Renderer>();
-            renderer.sharedMaterial = CreateOrUpdateMaterial(
-                ProjectRoot + "/Art/Mat_Unit.mat",
-                new Color(0.25f, 0.55f, 1f));
+            var col = go.AddComponent<CapsuleCollider>();
+            col.center = new Vector3(0f, 0.92f, 0f);
+            col.height = 1.85f;
+            col.radius = 0.30f;
+            col.direction = 1; // Y axis
 
             var agent = go.AddComponent<NavMeshAgent>();
-            agent.radius = 0.4f;
-            agent.height = 2f;
-            // The default Capsule primitive is centered on its origin: visual
-            // extends from y=-1 to y=+1. baseOffset=1 pushes the GameObject up
-            // so the capsule's feet sit on the navmesh instead of being
-            // half-buried in the ground.
-            agent.baseOffset = 1f;
+            agent.radius = 0.30f;
+            agent.height = 1.85f;
+            // Pivot is at the unit's feet (y=0). The stickman visual is
+            // anchored on that ground plane in BuildUnitVisual, so we want
+            // baseOffset = 0 — the NavMeshAgent now snaps the *feet* to the
+            // navmesh, not the body's centre.
+            agent.baseOffset = 0f;
             agent.speed = 4.5f;
             agent.angularSpeed = 720f;
             agent.acceleration = 24f;
@@ -216,9 +218,146 @@ namespace Project.EditorTools
             // and FloatingTextService.
             go.AddComponent<UnitFeedbackToasts>();
 
+            // Visual hierarchy (stickman). Each renderable child carries a
+            // BodyPartVisual targeting one BodyPartId. MaterialPropertyBlock
+            // tinting, no material clone.
+            BuildUnitVisual(go);
+
             var prefab = PrefabUtility.SaveAsPrefabAsset(go, UnitPrefabPath);
             Object.DestroyImmediate(go);
             return prefab;
+        }
+
+        // ---- Unit visual (stickman) ----
+
+        /// Reconstructs the "Visual" child of the given Unit root: 15
+        /// renderable segments arranged as a humanoid (head, torso, abdomen,
+        /// 3-segment arms × 2, 3-segment legs × 2), each carrying a
+        /// BodyPartVisual targeting its BodyPartId. The pivot is at the
+        /// feet (y = 0 ground plane), matching NavMeshAgent.baseOffset = 0.
+        ///
+        /// Safe to call repeatedly: an existing "Visual" child is destroyed
+        /// before the rebuild, so positions, scales and BodyPartId targets
+        /// always reflect the latest data layer.
+        public static void BuildUnitVisual(GameObject unitRoot)
+        {
+            var existing = unitRoot.transform.Find("Visual");
+            if (existing != null) Object.DestroyImmediate(existing.gameObject);
+
+            var visual = new GameObject("Visual");
+            visual.transform.SetParent(unitRoot.transform, false);
+            visual.transform.localPosition = Vector3.zero;
+            visual.transform.localRotation = Quaternion.identity;
+            visual.transform.localScale = Vector3.one;
+
+            // Single shared material — MaterialPropertyBlock does the tinting.
+            var skin = CreateOrUpdateMaterial(
+                ProjectRoot + "/Art/Mat_BodyPart.mat",
+                new Color(0.85f, 0.78f, 0.70f));
+
+            // Centerline (head / torso / abdomen).
+            MakeStickmanSphere  (visual.transform, "Head",       0.22f, new Vector3( 0.00f, 1.68f, 0.00f), BodyPartId.Head,    skin);
+            MakeStickmanCylinder(visual.transform, "Torso",      0.32f, 0.22f, 0.42f, new Vector3( 0.00f, 1.36f, 0.00f), BodyPartId.Torso,   skin);
+            MakeStickmanCylinder(visual.transform, "Abdomen",    0.28f, 0.20f, 0.20f, new Vector3( 0.00f, 1.05f, 0.00f), BodyPartId.Abdomen, skin);
+
+            // Left arm — upper + forearm bound to ArmLeft, hand to HandLeft.
+            MakeStickmanCylinder(visual.transform, "UpperArm_L", 0.10f, 0.10f, 0.32f, new Vector3(-0.27f, 1.41f, 0.00f), BodyPartId.ArmLeft,  skin);
+            MakeStickmanCylinder(visual.transform, "Forearm_L",  0.09f, 0.09f, 0.32f, new Vector3(-0.27f, 1.09f, 0.00f), BodyPartId.ArmLeft,  skin);
+            MakeStickmanSphere  (visual.transform, "Hand_L",     0.11f, new Vector3(-0.27f, 0.86f, 0.00f), BodyPartId.HandLeft, skin);
+
+            // Right arm (mirror x).
+            MakeStickmanCylinder(visual.transform, "UpperArm_R", 0.10f, 0.10f, 0.32f, new Vector3( 0.27f, 1.41f, 0.00f), BodyPartId.ArmRight,  skin);
+            MakeStickmanCylinder(visual.transform, "Forearm_R",  0.09f, 0.09f, 0.32f, new Vector3( 0.27f, 1.09f, 0.00f), BodyPartId.ArmRight,  skin);
+            MakeStickmanSphere  (visual.transform, "Hand_R",     0.11f, new Vector3( 0.27f, 0.86f, 0.00f), BodyPartId.HandRight, skin);
+
+            // Left leg — thigh + shin bound to LegLeft, foot to FootLeft.
+            MakeStickmanCylinder(visual.transform, "Thigh_L",    0.13f, 0.13f, 0.46f, new Vector3(-0.10f, 0.72f, 0.00f), BodyPartId.LegLeft,  skin);
+            MakeStickmanCylinder(visual.transform, "Shin_L",     0.11f, 0.11f, 0.42f, new Vector3(-0.10f, 0.28f, 0.00f), BodyPartId.LegLeft,  skin);
+            MakeStickmanCube    (visual.transform, "Foot_L",     new Vector3(0.13f, 0.07f, 0.22f), new Vector3(-0.10f, 0.035f, 0.06f), BodyPartId.FootLeft, skin);
+
+            // Right leg (mirror x).
+            MakeStickmanCylinder(visual.transform, "Thigh_R",    0.13f, 0.13f, 0.46f, new Vector3( 0.10f, 0.72f, 0.00f), BodyPartId.LegRight,  skin);
+            MakeStickmanCylinder(visual.transform, "Shin_R",     0.11f, 0.11f, 0.42f, new Vector3( 0.10f, 0.28f, 0.00f), BodyPartId.LegRight,  skin);
+            MakeStickmanCube    (visual.transform, "Foot_R",     new Vector3(0.13f, 0.07f, 0.22f), new Vector3( 0.10f, 0.035f, 0.06f), BodyPartId.FootRight, skin);
+        }
+
+        static void MakeStickmanSphere(Transform parent, string name, float diameter, Vector3 localPos, BodyPartId part, Material mat)
+        {
+            var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            go.name = name;
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = localPos;
+            go.transform.localScale = Vector3.one * diameter;
+            Object.DestroyImmediate(go.GetComponent<Collider>());
+
+            var rend = go.GetComponent<Renderer>();
+            rend.sharedMaterial = mat;
+
+            var visual = go.AddComponent<BodyPartVisual>();
+            visual.TargetPart = part;
+            visual.Renderer = rend;
+        }
+
+        static void MakeStickmanCylinder(Transform parent, string name, float width, float depth, float height, Vector3 localPos, BodyPartId part, Material mat)
+        {
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            go.name = name;
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = localPos;
+            // Unity's cylinder primitive is 2 m tall at scale 1, so scale.y =
+            // height / 2 gives the correct world height.
+            go.transform.localScale = new Vector3(width, height * 0.5f, depth);
+            Object.DestroyImmediate(go.GetComponent<Collider>());
+
+            var rend = go.GetComponent<Renderer>();
+            rend.sharedMaterial = mat;
+
+            var visual = go.AddComponent<BodyPartVisual>();
+            visual.TargetPart = part;
+            visual.Renderer = rend;
+        }
+
+        static void MakeStickmanCube(Transform parent, string name, Vector3 size, Vector3 localPos, BodyPartId part, Material mat)
+        {
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            go.name = name;
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = localPos;
+            go.transform.localScale = size;
+            Object.DestroyImmediate(go.GetComponent<Collider>());
+
+            var rend = go.GetComponent<Renderer>();
+            rend.sharedMaterial = mat;
+
+            var visual = go.AddComponent<BodyPartVisual>();
+            visual.TargetPart = part;
+            visual.Renderer = rend;
+        }
+
+        // ---- Standalone visual rebuild ----
+
+        /// Quick-rebuild loop: regenerates only the Visual hierarchy of the
+        /// Unit prefab without touching the rest of the asset (components,
+        /// SO references). Handy for iterating on proportions / colours.
+        [MenuItem("Tools/RTS MVP/Rebuild Unit Visual")]
+        public static void RebuildUnitVisual()
+        {
+            var contents = PrefabUtility.LoadPrefabContents(UnitPrefabPath);
+            if (contents == null)
+            {
+                Debug.LogError($"[MVPSceneSetup] Could not load Unit.prefab at {UnitPrefabPath}. Run 'Build Scene And Prefabs' first.");
+                return;
+            }
+            try
+            {
+                BuildUnitVisual(contents);
+                PrefabUtility.SaveAsPrefabAsset(contents, UnitPrefabPath);
+                Debug.Log("[MVPSceneSetup] Rebuilt Unit visual.");
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(contents);
+            }
         }
 
         static GameObject BuildOrderMarkerPrefab()
