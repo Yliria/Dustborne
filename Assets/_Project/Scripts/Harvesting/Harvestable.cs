@@ -149,8 +149,11 @@ namespace Project.Harvesting
             if (this != null) Destroy(gameObject);
         }
 
-        /// Rolls every entry in Def.Drops independently and spawns WorldItems
-        /// scattered around the drop origin. Public so tests / future events
+        /// Rolls every entry in Def.Drops independently and spawns scattered
+        /// WorldItems around the drop origin. Each unit produced by the roll
+        /// becomes its own pile (qty = 1 per WorldItem) so the player visibly
+        /// sees the loot fan out around the felled node. The pickup pipeline
+        /// then handles per-pile retrieval. Public so tests / future events
         /// can fire it directly.
         public void GenerateDrops(Vector3 dropOrigin)
         {
@@ -166,10 +169,13 @@ namespace Project.Harvesting
                 int qty = UnityEngine.Random.Range(min, max + 1);
                 if (qty <= 0) continue;
 
-                Vector2 offset2D = UnityEngine.Random.insideUnitCircle * 0.6f;
-                Vector3 pos = dropOrigin + new Vector3(offset2D.x, 0f, offset2D.y);
-                pos.y = 0.15f; // sit on the ground
-                WorldItem.Spawn(d.Item, qty, pos);
+                for (int u = 0; u < qty; u++)
+                {
+                    Vector2 offset2D = UnityEngine.Random.insideUnitCircle * 0.7f;
+                    Vector3 pos = dropOrigin + new Vector3(offset2D.x, 0f, offset2D.y);
+                    pos.y = 0.15f; // sit on the ground
+                    WorldItem.Spawn(d.Item, 1, pos);
+                }
             }
         }
 

@@ -44,7 +44,11 @@ namespace Project.Items
         }
 
         public float WeightRatio => EffectiveMaxWeight > 0f ? CurrentWeight / EffectiveMaxWeight : 0f;
-        public bool IsOverweight => WeightRatio > 1f;
+        /// Inclusive on the upper bound: at exactly the capacity (ratio = 1.0)
+        /// we consider the unit overweight too. Makes "exactly 30 kg in a
+        /// 30 kg sack" trigger the red bar, the speed penalty and the
+        /// Strength XP hook — matches player intuition of "the bag is full".
+        public bool IsOverweight => WeightRatio >= 1f;
 
         public event Action OnInventoryChanged;
         public event Action<float> OnWeightChanged;

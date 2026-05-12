@@ -18,7 +18,9 @@ GameObject:
   - component: {fileID: 3840339391472819092}
   - component: {fileID: 3245849789285375364}
   - component: {fileID: 7861863983293287730}
+  - component: {fileID: 2662271401956938042}
   - component: {fileID: 9061565031659133667}
+  - component: {fileID: 4073016633680080522}
   m_Layer: 0
   m_Name: Unit
   m_TagString: Untagged
@@ -329,6 +331,23 @@ MonoBehaviour:
   - Type: 4
     Level: 1
     XPCurrent: 0
+--- !u!114 &2662271401956938042
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6584868055992020589}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0a75fe3614f72d548b25221d6a572e98, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Items.Inventory
+  baseMaxWeight: 30
+  dropForwardDistance: 1
+  dropHeight: 0.15
+  dropMergeRadius: 1.5
+  stacks: []
 --- !u!114 &9061565031659133667
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -341,6 +360,23 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 60028eecab4104444a084fc429bec498, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Project.Skills.SkillModifiersBridge
-  speedXPPerSecondMoving: 0.1
-  movementVelocityThreshold: 0.1
   vitalityXPPerDamage: 1
+  weightPenaltyStartRatio: 0.75
+  weightPenaltyAtFullLoad: 0.7
+  weightPenaltyOverloadSlope: 0.4
+  weightPenaltyFloor: 0.15
+--- !u!114 &4073016633680080522
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6584868055992020589}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5eaea5b7f8e194941a974e67cb29d6dc, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Items.PassiveXPHooks
+  movementVelocityThreshold: 0.1
+  speedXPPerSecondMoving: 0.1
+  overweightStrengthXPPerSecond: 0.15

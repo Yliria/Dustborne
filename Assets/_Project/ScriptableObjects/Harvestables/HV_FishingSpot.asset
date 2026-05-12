@@ -1,0 +1,26 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f53b69ce6d58137478a2aa4380da12d8, type: 3}
+  m_Name: HV_FishingSpot
+  m_EditorClassIdentifier: Assembly-CSharp::Project.Harvesting.HarvestableDefinition
+  Type: 2
+  DisplayName: Fishing Spot
+  MaxHealth: 50
+  RequiredTool: {fileID: 11400000, guid: 52d203c13389b2f43832ea7f1f52e705, type: 2}
+  BaseHarvestSpeed: 5
+  InteractionRange: 2.5
+  Drops:
+  - Item: {fileID: 11400000, guid: 1811c0ab90f90714488e780114d63d27, type: 2}
+    MinQuantity: 1
+    MaxQuantity: 2
+    Chance: 0.7
+  VisualPrefab: {fileID: 0}
