@@ -1,4 +1,5 @@
 using System;
+using Project.Harvesting;
 using Project.Health;
 using Project.Items;
 using Project.Skills;
@@ -30,6 +31,7 @@ namespace Project.DebugUI
         bool _visible;
         Vector2 _scroll;
         bool _inventoryFolded;
+        bool _harvestablesFolded = true;
 
         Texture2D _whiteTex;
         GUIStyle _header;
@@ -48,6 +50,7 @@ namespace Project.DebugUI
         static readonly Color WeightLight = new(0.30f, 0.65f, 0.30f);
         static readonly Color WeightFull = new(0.85f, 0.70f, 0.15f);
         static readonly Color WeightOver = new(0.85f, 0.20f, 0.20f);
+        static readonly Color HarvestColor = new(0.40f, 0.75f, 0.40f);
 
         void Awake()
         {
@@ -111,6 +114,8 @@ namespace Project.DebugUI
             DrawSkills();
             GUILayout.Space(8);
             DrawInventory();
+            GUILayout.Space(8);
+            DrawHarvestables();
             GUILayout.Space(8);
             DrawGlobalActions();
 
@@ -290,6 +295,56 @@ namespace Project.DebugUI
             if (GUILayout.Button("Clear inventory", GUILayout.Height(22f))) _inventory.Clear();
             if (GUILayout.Button("Spawn 3 items near unit", GUILayout.Height(22f))) SpawnDebugItemsNearUnit();
             GUILayout.EndHorizontal();
+        }
+
+        // ---- Harvestables ----
+
+        void DrawHarvestables()
+        {
+            var nodes = FindObjectsByType<Harvestable>(FindObjectsSortMode.InstanceID);
+
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button(_harvestablesFolded ? "▶" : "▼", GUILayout.Width(22f), GUILayout.Height(20f)))
+                _harvestablesFolded = !_harvestablesFolded;
+            GUILayout.Label($"<b>HARVESTABLES IN SCENE</b>  ({nodes.Length} active)", _header);
+            GUILayout.EndHorizontal();
+
+            if (_harvestablesFolded) return;
+
+            if (nodes.Length == 0)
+            {
+                GUILayout.Label("<i>No harvestable nodes (all depleted, or scene not yet built).</i>", _smallRich);
+                return;
+            }
+
+            for (int i = 0; i < nodes.Length; i++)
+            {
+                var h = nodes[i];
+                if (h == null || h.Def == null) continue;
+
+                var rect = GUILayoutUtility.GetRect(0f, 0f, GUILayout.ExpandWidth(true), GUILayout.Height(36f));
+                float maxHp = Mathf.Max(1f, h.Def.MaxHealth);
+                float ratio = Mathf.Clamp01(h.CurrentHealth / maxHp);
+
+                var top = new Rect(rect.x + 4f, rect.y, rect.width - 90f, 16f);
+                string toolHint = h.Def.RequiredTool != null ? $"  <i>(tool: {h.Def.RequiredTool.Id})</i>" : "";
+                GUI.Label(top, $"<b>{h.Def.Type}</b> {h.Def.DisplayName}  {h.CurrentHealth:0.0}/{maxHp:0}{toolHint}", _row);
+
+                var bar = new Rect(rect.x + 4f, rect.y + 18f, rect.width - 90f, 8f);
+                DrawBarAt(bar, ratio, HarvestColor);
+
+                var resetBtn = new Rect(rect.x + rect.width - 82f, rect.y + 8f, 78f, 22f);
+                if (GUI.Button(resetBtn, "Reset")) h.DebugRestoreToFull();
+            }
+
+            GUILayout.Space(4);
+            if (GUILayout.Button("Reset all harvestables", GUILayout.Height(22f)))
+            {
+                for (int i = 0; i < nodes.Length; i++)
+                {
+                    if (nodes[i] != null) nodes[i].DebugRestoreToFull();
+                }
+            }
         }
 
         void SpawnDebugItemsNearUnit()

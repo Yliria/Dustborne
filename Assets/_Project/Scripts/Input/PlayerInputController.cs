@@ -1,4 +1,6 @@
 using Project.Core;
+using Project.Harvesting;
+using Project.Harvesting.Orders;
 using Project.Items;
 using Project.Items.Orders;
 using Project.Units;
@@ -68,14 +70,25 @@ namespace Project.PlayerInput
             var kb = Keyboard.current;
             if (kb != null) append = kb.leftShiftKey.isPressed || kb.rightShiftKey.isPressed;
 
-            // Interactable targets take precedence over raw ground moves.
-            // Component check (no layer required) — the raycast already hit
-            // the WorldItem's collider since it's closer than the ground.
-            var worldItem = hit.collider != null ? hit.collider.GetComponentInParent<WorldItem>() : null;
-            if (worldItem != null)
+            // Click priority: WorldItem → Harvestable → ground. Each level
+            // uses GetComponentInParent so a click on a child collider
+            // (visual mesh, hitbox) still resolves to the gameplay component
+            // on the root.
+            if (hit.collider != null)
             {
-                unit.IssueOrder(new PickupOrder(worldItem), append);
-                return;
+                var worldItem = hit.collider.GetComponentInParent<WorldItem>();
+                if (worldItem != null)
+                {
+                    unit.IssueOrder(new PickupOrder(worldItem), append);
+                    return;
+                }
+
+                var harvestable = hit.collider.GetComponentInParent<Harvestable>();
+                if (harvestable != null && !harvestable.IsDepleted)
+                {
+                    unit.IssueOrder(new HarvestOrder(harvestable), append);
+                    return;
+                }
             }
 
             GameObject prefab = append && queuedMoveMarkerPrefab != null

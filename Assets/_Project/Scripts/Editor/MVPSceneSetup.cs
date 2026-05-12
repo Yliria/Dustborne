@@ -3,6 +3,7 @@ using System.IO;
 using Project.CameraRig;
 using Project.Core;
 using Project.DebugUI;
+using Project.Harvesting;
 using Project.Health;
 using Project.Items;
 using Project.PlayerInput;
@@ -28,6 +29,7 @@ namespace Project.EditorTools
         const string BodyPartsDir = SODir + "/BodyParts";
         const string SkillsSODir = SODir + "/Skills";
         const string ItemsSODir = SODir + "/Items";
+        const string HarvestablesSODir = SODir + "/Harvestables";
         const string ScenePath = ScenesDir + "/MVP.unity";
         const string UnitPrefabPath = PrefabsDir + "/Unit.prefab";
         const string MarkerPrefabPath = PrefabsDir + "/OrderMarker.prefab";
@@ -44,12 +46,14 @@ namespace Project.EditorTools
             EnsureFolder(BodyPartsDir);
             EnsureFolder(SkillsSODir);
             EnsureFolder(ItemsSODir);
+            EnsureFolder(HarvestablesSODir);
 
             // ScriptableObject data first — prefabs reference these.
             var bodyParts = CreateOrUpdateBodyPartDefinitions();
             var xpCurve = CreateOrUpdateXPCurve();
             var items = CreateOrUpdateItemData();
             var itemDatabase = CreateOrUpdateItemDatabase(items);
+            var harvestables = CreateOrUpdateHarvestableDefinitions(itemDatabase);
 
             var unitPrefab = BuildUnitPrefab(bodyParts, xpCurve);
             var markerPrefab = BuildOrderMarkerPrefab();
@@ -63,8 +67,13 @@ namespace Project.EditorTools
             BuildObstacles();
             var cam = BuildCamera();
 
-            // Bake before instantiating the unit so its NavMeshAgent has a
-            // surface to snap to on first enable.
+            // Harvestables go in BEFORE the navmesh bake so their colliders
+            // and NavMeshObstacles are accounted for. Trees, rocks, fishing
+            // spots — units will path around them.
+            SpawnInitialHarvestables(harvestables);
+
+            // Bake after all static obstacles are in place. Done before the
+            // unit instantiates so its NavMeshAgent has a surface to snap to.
             BakeNavMesh(ground);
 
             var unitInstance = (GameObject)PrefabUtility.InstantiatePrefab(unitPrefab);
@@ -710,6 +719,212 @@ namespace Project.EditorTools
             db.EditorReplaceAll(items);
             EditorUtility.SetDirty(db);
             return db;
+        }
+
+        // ---- Harvestables ----
+
+        static List<HarvestableDefinition> CreateOrUpdateHarvestableDefinitions(ItemDatabase db)
+        {
+            EnsureFolder(HarvestablesSODir);
+
+            var list = new List<HarvestableDefinition>();
+
+            list.Add(SeedHarvestable(
+                "HV_Tree_Oak",
+                HarvestableType.Tree, "Oak Tree",
+                maxHealth: 100f, baseHarvestSpeed: 10f, interactionRange: 1.5f,
+                requiredTool: db.GetById("stone_axe"),
+                drops: new[] {
+                    new HarvestableDrop { Item = db.GetById("wood_log"), MinQuantity = 3, MaxQuantity = 5, Chance = 1f }
+                }));
+
+            list.Add(SeedHarvestable(
+                "HV_Rock_Basic",
+                HarvestableType.Rock, "Basic Rock",
+                maxHealth: 150f, baseHarvestSpeed: 8f, interactionRange: 1.5f,
+                requiredTool: db.GetById("stone_pickaxe"),
+                drops: new[] {
+                    new HarvestableDrop { Item = db.GetById("stone_chunk"), MinQuantity = 2, MaxQuantity = 4, Chance = 1f }
+                }));
+
+            list.Add(SeedHarvestable(
+                "HV_FishingSpot",
+                HarvestableType.FishingSpot, "Fishing Spot",
+                maxHealth: 50f, baseHarvestSpeed: 5f, interactionRange: 2.5f,
+                requiredTool: db.GetById("fishing_rod"),
+                drops: new[] {
+                    new HarvestableDrop { Item = db.GetById("fish_small"), MinQuantity = 1, MaxQuantity = 2, Chance = 0.7f }
+                }));
+
+            return list;
+        }
+
+        static HarvestableDefinition SeedHarvestable(
+            string assetName,
+            HarvestableType type, string displayName,
+            float maxHealth, float baseHarvestSpeed, float interactionRange,
+            ItemData requiredTool, HarvestableDrop[] drops)
+        {
+            string path = $"{HarvestablesSODir}/{assetName}.asset";
+            var def = AssetDatabase.LoadAssetAtPath<HarvestableDefinition>(path);
+            if (def == null)
+            {
+                def = ScriptableObject.CreateInstance<HarvestableDefinition>();
+                AssetDatabase.CreateAsset(def, path);
+            }
+
+            def.Type = type;
+            def.DisplayName = displayName;
+            def.MaxHealth = maxHealth;
+            def.BaseHarvestSpeed = baseHarvestSpeed;
+            def.InteractionRange = interactionRange;
+            def.RequiredTool = requiredTool;
+            def.Drops = new List<HarvestableDrop>(drops);
+            def.VisualPrefab = null; // fallback visual handled by Harvestable
+
+            EditorUtility.SetDirty(def);
+            return def;
+        }
+
+        // ---- Initial harvestable spawning ----
+
+        static void SpawnInitialHarvestables(List<HarvestableDefinition> defs)
+        {
+            HarvestableDefinition tree = null, rock = null, fish = null;
+            for (int i = 0; i < defs.Count; i++)
+            {
+                if (defs[i] == null) continue;
+                if (tree == null && defs[i].Type == HarvestableType.Tree) tree = defs[i];
+                if (rock == null && defs[i].Type == HarvestableType.Rock) rock = defs[i];
+                if (fish == null && defs[i].Type == HarvestableType.FishingSpot) fish = defs[i];
+            }
+
+            var root = new GameObject("Harvestables");
+            var treesParent = new GameObject("Trees");        treesParent.transform.SetParent(root.transform);
+            var rocksParent = new GameObject("Rocks");        rocksParent.transform.SetParent(root.transform);
+            var fishingParent = new GameObject("FishingSpots"); fishingParent.transform.SetParent(root.transform);
+
+            // Trees — 4, spread around the play area, away from obstacles.
+            if (tree != null)
+            {
+                CreateHarvestableInstance(tree, new Vector3(  8f, 0f,  8f), treesParent.transform);
+                CreateHarvestableInstance(tree, new Vector3( -8f, 0f, -8f), treesParent.transform);
+                CreateHarvestableInstance(tree, new Vector3(-12f, 0f,  0f), treesParent.transform);
+                CreateHarvestableInstance(tree, new Vector3( 12f, 0f, -4f), treesParent.transform);
+            }
+
+            // Rocks — 3.
+            if (rock != null)
+            {
+                CreateHarvestableInstance(rock, new Vector3( -4f, 0f, -8f), rocksParent.transform);
+                CreateHarvestableInstance(rock, new Vector3(  8f, 0f, -4f), rocksParent.transform);
+                CreateHarvestableInstance(rock, new Vector3( -3f, 0f,  9f), rocksParent.transform);
+            }
+
+            // Fishing spots — 2, at the far corners with a thin "water" deco
+            // square so they read as a pond at a glance.
+            if (fish != null)
+            {
+                CreateHarvestableInstance(fish, new Vector3( 15f, 0f,  15f), fishingParent.transform);
+                CreateHarvestableInstance(fish, new Vector3(-15f, 0f,  15f), fishingParent.transform);
+            }
+        }
+
+        static GameObject CreateHarvestableInstance(HarvestableDefinition def, Vector3 position, Transform parent)
+        {
+            var go = new GameObject($"Harvestable_{def.Type}_{def.name}");
+            go.transform.SetParent(parent, true);
+            go.transform.position = position;
+
+            // Per-type geometry (visual + collider + obstacle volume).
+            Vector3 visualScale;
+            Vector3 visualOffset;
+            Vector3 colliderSize;
+            Vector3 colliderCenter;
+            PrimitiveType primitive;
+            Color tintColor;
+            string materialPath;
+
+            switch (def.Type)
+            {
+                case HarvestableType.Tree:
+                    primitive = PrimitiveType.Cylinder;
+                    visualScale = new Vector3(0.5f, 1.5f, 0.5f); // height = 3
+                    visualOffset = new Vector3(0f, 1.5f, 0f);
+                    colliderSize = new Vector3(0.5f, 3f, 0.5f);
+                    colliderCenter = new Vector3(0f, 1.5f, 0f);
+                    tintColor = new Color(0.40f, 0.26f, 0.13f);
+                    materialPath = ProjectRoot + "/Art/Mat_Harvestable_Tree.mat";
+                    break;
+                case HarvestableType.Rock:
+                case HarvestableType.Ore:
+                    primitive = PrimitiveType.Sphere;
+                    visualScale = Vector3.one * 1.2f;
+                    visualOffset = new Vector3(0f, 0.6f, 0f);
+                    colliderSize = Vector3.one * 1.2f;
+                    colliderCenter = new Vector3(0f, 0.6f, 0f);
+                    tintColor = new Color(0.50f, 0.50f, 0.55f);
+                    materialPath = ProjectRoot + "/Art/Mat_Harvestable_Rock.mat";
+                    break;
+                case HarvestableType.FishingSpot:
+                    primitive = PrimitiveType.Cube;
+                    visualScale = new Vector3(1.5f, 0.1f, 1.5f);
+                    visualOffset = new Vector3(0f, 0.05f, 0f);
+                    // Inflated vertical obstacle/collider so the navmesh
+                    // bake clearly treats the spot as a blocker, even though
+                    // the visual is a flat disc of water.
+                    colliderSize = new Vector3(1.5f, 2f, 1.5f);
+                    colliderCenter = new Vector3(0f, 1f, 0f);
+                    tintColor = new Color(0.25f, 0.55f, 0.85f);
+                    materialPath = ProjectRoot + "/Art/Mat_Harvestable_FishingSpot.mat";
+                    break;
+                default:
+                    primitive = PrimitiveType.Cube;
+                    visualScale = Vector3.one;
+                    visualOffset = new Vector3(0f, 0.5f, 0f);
+                    colliderSize = Vector3.one;
+                    colliderCenter = new Vector3(0f, 0.5f, 0f);
+                    tintColor = Color.gray;
+                    materialPath = ProjectRoot + "/Art/Mat_Harvestable_Generic.mat";
+                    break;
+            }
+
+            // Visual child (no collider — root owns the click collider).
+            var visual = GameObject.CreatePrimitive(primitive);
+            visual.name = $"Visual_{def.Type}";
+            visual.transform.SetParent(go.transform, false);
+            visual.transform.localScale = visualScale;
+            visual.transform.localPosition = visualOffset;
+            Object.DestroyImmediate(visual.GetComponent<Collider>());
+
+            var visualRenderer = visual.GetComponent<Renderer>();
+            if (visualRenderer != null)
+            {
+                visualRenderer.sharedMaterial = CreateOrUpdateMaterial(materialPath, tintColor);
+            }
+
+            // Root collider — sized to match (or oversize) the visual so
+            // raycast hits and navmesh bake both see the same footprint.
+            var col = go.AddComponent<BoxCollider>();
+            col.center = colliderCenter;
+            col.size = colliderSize;
+
+            // NavMeshObstacle with carve=true so the agent re-routes if the
+            // node is destroyed at runtime.
+            var obs = go.AddComponent<NavMeshObstacle>();
+            obs.shape = NavMeshObstacleShape.Box;
+            obs.center = colliderCenter;
+            obs.size = colliderSize;
+            obs.carving = true;
+
+            // Harvestable last — Awake will see the existing visual child and
+            // skip its own fallback creation. It will also re-tune the
+            // obstacle from collider bounds, which is fine (idempotent).
+            var hv = go.AddComponent<Harvestable>();
+            hv.Def = def;
+            hv.CurrentHealth = def.MaxHealth;
+
+            return go;
         }
     }
 }

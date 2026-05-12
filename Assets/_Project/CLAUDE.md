@@ -1,4 +1,4 @@
-# Dustborne — Fondations + Santé/Sang + Skills + Items/Inventaire
+# Dustborne — Fondations + Santé/Sang + Skills + Items + Récolte
 
 Jeu RTS-like, vue de haut, **une unité** contrôlable par le joueur. Inspirations : Kenshi (pause active, compétences progressives, dégâts par parties du corps), Valheim/Rust (récolte → craft → armement). MVP : zone fixe, hand-crafted.
 
@@ -6,6 +6,7 @@ Sessions livrées :
 - **Session 1** — fondations (Unit, OrderQueue, GameTime, Camera, Input, DebugUI).
 - **Session 2** — Santé/Sang + Skills + Bridge.
 - **Session 3** — Items, Inventaire au poids, Pickup, intégration vitesse/XP, Revive.
+- **Session 4** — Dette technique (MPB, drop merge, dédup, extraction PassiveXPHooks) + Récolte (Harvestable, HarvestOrder, 9 noeuds en scène).
 
 Tous les modules suivants se branchent dessus sans modifier ces fondations.
 
@@ -40,7 +41,8 @@ Tous les modules suivants se branchent dessus sans modifier ces fondations.
   - `HealthSystem` — Module 1 (livré)
   - `SkillSystem` — Module 1.5 (livré)
   - `Inventory` — Module 2 (livré)
-  - `SkillModifiersBridge` — pont Health ↔ Skills ↔ Inventory (livré)
+  - `SkillModifiersBridge` — pont event-driven Health ↔ Skills ↔ Inventory (livré)
+  - `PassiveXPHooks` — trickle XP (Speed en marchant, Strength en overweight). Séparé du Bridge depuis Session 4 (livré)
   - `Equipment`, `CombatSystem`, ... — Modules 5+
 
 ### 5. Couplage event-based (Health ↔ Skills ↔ Inventory)
@@ -60,18 +62,21 @@ Tous les modules suivants se branchent dessus sans modifier ces fondations.
    - OnPartStateChanged                                 
                                                        
    le bridge appelle (push) :
-   - SkillSystem.GainXP(Speed | Strength | Vitality)
+   - SkillSystem.GainXP(Vitality)  // pour la défense
    - Health.SetVitalityMultiplier + rescale HP/Blood (ratio-preserving)
    - Inventory.SetMaxWeightBonus(skills.GetMaxCarryWeightBonus())
    - agent.speed = base × moveSpeedMult × healthMult × weightMult
 
-   responsabilités :
+   responsabilités du Bridge (event-driven uniquement) :
    - Vitality level up      → rescale max HP / Blood (capacité, pas de heal)
    - Strength level up      → push BonusMaxWeight dans Inventory
    - Speed / Vitality / partState change / WeightChanged → recompute agent.speed
    - Damage taken           → +Vitality XP au défenseur, +Str/Dex XP à l'attaquant
-   - Mouvement              → +Speed XP (trickle)
-   - Mouvement + overweight → +Strength XP (trickle)
+
+PassiveXPHooks (séparé du Bridge depuis Session 4) tient le tick :
+   - Mouvement              → +Speed XP (0.1 / sec)
+   - Mouvement + overweight → +Strength XP (0.15 / sec)
+   - (futur)                → +Hunger, Cold, Posture, etc.
 ```
 
 `HealthSystem` n'a aucun `using Project.Skills` ni `using Project.Items`. `Inventory` n'a aucun `using Project.Skills` ni `using Project.Health`. `SkillSystem` n'a `using Project.Health` que pour la signature de `GrantAttackerXP(Unit, DamageInfo)` (helper static).
@@ -239,6 +244,52 @@ Le bouton REVIVE du debug panel l'appelle. Le bouton RESET aussi (auto-revive ap
 
 ---
 
+## Module 3 — Récolte
+
+### Modèle
+- **Harvestable** : MonoBehaviour sur les noeuds du monde (arbres, rochers, bancs de poissons). Référence un `HarvestableDefinition` ScriptableObject pour toutes ses stats.
+- **HarvestableDefinition** (SO) : porte HP du noeud, vitesse de récolte de base, range d'interaction, outil requis (référence directe vers un `ItemData`), et la table de drops (`HarvestableDrop` : item + min/max qty + chance 0..1).
+- **Pas de durabilité d'outil pour le MVP.** L'outil est "vérifié" (must be in inventory), pas consommé.
+- **Drops à la fin** (mode "OnDepleted") : quand HP = 0, on roll chaque drop indépendamment et on spawn des WorldItems éparpillés (rayon ~0.6m). Le pipeline pickup existant prend le relais.
+- **Pas de respawn** : noeud épuisé reste détruit. Respawn = Module 7 (Monde & Save).
+
+### HarvestOrder
+`HarvestOrder : IOrder, ITargetedOrder` :
+1. `OnStart` valide : target non-null, non-depleted, Def présent, outil requis dans Inventory (sinon log + Failed).
+2. `Tick` : approche jusqu'à `Def.InteractionRange` (XZ), puis stop. À chaque frame in-range :
+   - `damage = Def.BaseHarvestSpeed × skills.GetHarvestSpeedMult() × dt`
+   - `target.ApplyDamage(damage)`
+   - `skills.GainXP(Labour, damage × 0.5)` — pause-safe via `GainXP` normal.
+3. Si target depleted → Complete. Drops auto-générés par `Harvestable.OnDepleted` → WorldItem.Spawn(*).
+4. `OnEnd` débloque l'agent.
+
+XP Labour est **proportionnel au boulot fait** (au damage), pas au temps écoulé. Plus tu cognes vite, plus tu progresses vite. Un Labour level up rend la récolte visiblement plus rapide via `GetHarvestSpeedMult`.
+
+### Découplage
+`HarvestOrder` **ne touche pas à Inventory.Add**. Les drops passent par WorldItems → PickupOrder. Cohérent avec le pipeline existant et préserve la possibilité d'avoir un autre acteur (animal, PNJ) ramasser le drop.
+
+### Pathfinding
+Chaque `Harvestable` auto-ajoute un `NavMeshObstacle` avec `carving = true`. La taille de l'obstacle s'aligne sur les bounds du collider racine. La scène re-bake la NavMesh au build pour intégrer les obstacles statiques. Quand un noeud est détruit (depleted), le carving runtime libère l'espace.
+
+### Visual fallback
+`HarvestableDefinition.VisualPrefab` est optionnel. Si null, `Harvestable.Awake` instancie un primitive enfant selon le type :
+- `Tree` → cylindre marron (3m de haut, radius 0.25m)
+- `Rock`/`Ore` → sphère grise (1.2m)
+- `FishingSpot` → cube plat cyan (1.5×0.1×1.5) — l'obstacle, lui, est inflated à 1.5×2×1.5 pour bien bloquer la bake.
+- `Bush` → sphère verte
+- `Other` → cube gris
+
+Le tint runtime utilise `MaterialPropertyBlock`, jamais de Material clone. Quand le setup éditeur crée les noeuds en scène, il pré-injecte le visual via un Material asset partagé par type (`Mat_Harvestable_Tree`, `..._Rock`, `..._FishingSpot`) — pas de clone non plus.
+
+### Préparé pour le futur
+- **Multi-tools** : `RequiredTool` → `List<ItemData> AcceptedTools` quand on aura plusieurs paliers d'outil.
+- **Drop per tick** : un `HarvestableDefinition.DropMode { OnDepleted, PerTick }` permettra le filet de pêche qui produit en continu.
+- **Anims** : `HarvestableInteractAnim` jouable côté Unit (pas bloquant, juste cosmétique).
+- **Durabilité d'outil** : décrémenter une durabilité sur l'outil à chaque tick, à intégrer quand `ItemData` aura un champ `Durability` (Module 5 ou plus tard).
+- **Respawn** : `HarvestableRespawnerService` mémorise les positions des noeuds détruits + un timer → re-instancie (Module 7).
+
+---
+
 ## Structure des dossiers
 
 ```
@@ -279,13 +330,21 @@ Assets/_Project/
       Inventory.cs              MonoBehaviour
       WorldItem.cs              MonoBehaviour on loot piles
       WorldItemService.cs       generic-prefab bootstrap
+      PassiveXPHooks.cs         trickle XP (Speed, Strength) — split from Bridge
       Orders/                   Project.Items.Orders
         PickupOrder.cs
+    Harvesting/                 Project.Harvesting
+      HarvestableType.cs        enum
+      HarvestableDrop.cs        serializable
+      HarvestableDefinition.cs  ScriptableObject
+      Harvestable.cs            MonoBehaviour on world nodes
+      Orders/                   Project.Harvesting.Orders
+        HarvestOrder.cs
     Input/                      Project.PlayerInput
-      PlayerInputController.cs  raycast click → PickupOrder or MoveOrder
+      PlayerInputController.cs  raycast click → PickupOrder | HarvestOrder | MoveOrder
     Debug/                      Project.DebugUI
       GameTimeDebugUI.cs        HUD top-left
-      HealthSkillsDebugPanel.cs F1 toggle, paper-doll + Inventory + buttons
+      HealthSkillsDebugPanel.cs F1 toggle, paper-doll + Inventory + Harvestables + buttons
     Editor/                     Project.EditorTools
       MVPSceneSetup.cs          Tools menu builder
   ScriptableObjects/
@@ -294,14 +353,15 @@ Assets/_Project/
       DefaultXPCurve.asset
     Items/                      10 ItemData assets (test set)
     ItemDatabase.asset
+    Harvestables/               3 HarvestableDefinition assets (tree, rock, fishing)
   Prefabs/
-    Unit.prefab                 (Health/Skills/Inventory/Bridge wired)
+    Unit.prefab                 (Health / Skills / Inventory / Bridge / PassiveXPHooks)
     OrderMarker.prefab
     OrderMarker_Queued.prefab
-    WorldItem_Generic.prefab    fallback world body (cube tinted at spawn)
+    WorldItem_Generic.prefab    fallback world body (cube tinted via MPB)
   Scenes/
-    MVP.unity                   (5 WorldItems spawned at fixed positions)
-  Art/                          materials générés par le setup
+    MVP.unity                   (5 WorldItems + 9 Harvestables placed; navmesh baked w/ obstacles)
+  Art/                          materials générés par le setup (URP Lit + line)
   Settings/                     réservé (URP assets, etc.)
 ```
 
@@ -329,12 +389,12 @@ Assets/_Project/
 | ~~1~~ | ~~Santé & Sang~~ | **livré** |
 | ~~1.5~~ | ~~Skills (XP par usage)~~ | **livré** |
 | ~~2~~ | ~~Items & Inventaire au poids + Pickup~~ | **livré** |
-| 3 | Récolte (Harvestable, ressources, outils) | `HarvestOrder : IOrder, ITargetedOrder`, `Harvestable` MonoBehaviour. Appelle `inventory.Add(def, qty)` puis `skills.GainXP(Labour, X)` à la fin du tick. |
-| 4 | Crafting (recettes, stations, output) | `CraftingStation` MonoBehaviour, `CraftOrder : IOrder`. Consomme via `inventory.Remove`, produit via `inventory.Add`. Vitesse modulée par `GetCraftSpeedMult`. |
-| 5 | Combat (mêlée, dégâts directionnels, hitbox par partie du corps) | `AttackOrder : IOrder, ITargetedOrder`, `WeaponSystem`, `HealthSystem.ApplyDamage`. Construit le `DamageInfo` avec `Attacker = this.Unit` et `Weapon = ...`. |
+| ~~3~~ | ~~Récolte (Harvestable + HarvestOrder + drops via WorldItems)~~ | **livré** |
+| 4 | Crafting (recettes, stations, output) | `CraftingStation` MonoBehaviour, `CraftOrder : IOrder`. Consomme via `inventory.Remove`, produit via `inventory.Add` (ou WorldItem.Spawn devant la station). Vitesse modulée par `GetCraftSpeedMult`. |
+| 5 | Combat (mêlée, dégâts directionnels, hitbox par partie du corps) | `AttackOrder : IOrder, ITargetedOrder`, `WeaponSystem`, `HealthSystem.ApplyDamage`. Construit le `DamageInfo` avec `Attacker = this.Unit` et `Weapon = ...`. Durabilité d'outil potentiellement intégrée ici. |
 | 6 | Equipment (slots d'armes/outils équipés) | `Equipment` component séparé, *pas* une extension d'Inventory. Items équipés sortent de l'inventaire et passent en slot. |
-| 7 | IA (monstres, factions) | nouveau composant `AIController` qui pousse des `IOrder` dans une `OrderQueue` exactement comme le joueur. **Réutilise `HealthSystem`, `SkillSystem`, `Inventory` tels quels.** |
-| 8 | Save/Load | sérialiser via `ItemData.Id` (lookup `ItemDatabase.GetById`) pour résister aux refactors. |
+| 7 | Monde / Respawn / Save-Load | `HarvestableRespawnerService` re-spawn les noeuds après timer. Sauvegarde via `ItemData.Id` (lookup `ItemDatabase.GetById`). |
+| 8 | IA (monstres, factions) | nouveau composant `AIController` qui pousse des `IOrder` dans une `OrderQueue` exactement comme le joueur. **Réutilise `HealthSystem`, `SkillSystem`, `Inventory` tels quels.** |
 
 Conséquence : `Unit` accepte tous ces composants sans modification, et `IOrder` accueille tous ces nouveaux types d'ordre sans changement d'interface.
 
@@ -349,12 +409,11 @@ Conséquence : `Unit` accepte tous ces composants sans modification, et `IOrder`
 4. Crée/met à jour :
    - `Assets/_Project/ScriptableObjects/BodyParts/BodyPart_*.asset` (7)
    - `Assets/_Project/ScriptableObjects/Skills/DefaultXPCurve.asset`
-   - `Assets/_Project/ScriptableObjects/Items/Item_*.asset` (10)
-   - `Assets/_Project/ScriptableObjects/ItemDatabase.asset`
-   - `Assets/_Project/Prefabs/Unit.prefab` (Health/Skills/Inventory/Bridge câblés)
-   - `Assets/_Project/Prefabs/OrderMarker*.prefab`
-   - `Assets/_Project/Prefabs/WorldItem_Generic.prefab`
-   - `Assets/_Project/Scenes/MVP.unity` (NavMesh bakée, 5 WorldItems placés, GameSystems = `GameTimeService` + `WorldItemService` + Debug panels)
+   - `Assets/_Project/ScriptableObjects/Items/Item_*.asset` (10) + `ItemDatabase.asset`
+   - `Assets/_Project/ScriptableObjects/Harvestables/HV_*.asset` (3 : Tree, Rock, FishingSpot)
+   - `Assets/_Project/Prefabs/Unit.prefab` (Health / Skills / Inventory / Bridge / PassiveXPHooks)
+   - `Assets/_Project/Prefabs/OrderMarker*.prefab` + `WorldItem_Generic.prefab`
+   - `Assets/_Project/Scenes/MVP.unity` (NavMesh bakée autour des obstacles ET des harvestables, 5 WorldItems + 9 Harvestables placés, GameSystems wired)
 5. Vérifie en bas de la console : `[MVPSceneSetup] Built scene at ...`.
 
 ### 2. Lancer
@@ -365,33 +424,43 @@ Conséquence : `Unit` accepte tous ces composants sans modification, et `IOrder`
 | Input | Effet |
 |---|---|
 | **Clic gauche** sur un WorldItem | `PickupOrder` (annule la file) |
+| **Clic gauche** sur un Harvestable | `HarvestOrder` (annule la file ; échoue si l'outil requis manque) |
 | **Clic gauche** sur le sol | `MoveOrder` (annule la file) |
 | **Shift + Clic gauche** | Ajoute le même ordre à la file ; ligne preview pendant Shift |
 | **Espace** | Pause / reprise |
 | **WASD / flèches** | Pan caméra |
 | **Molette** | Zoom |
-| **F1** | Toggle Health & Skills + Inventory debug panel |
+| **F1** | Toggle Health & Skills + Inventory + Harvestables debug panel |
 
-### 4. Tester Santé/Skills/Inventory
-- **F1** ouvre le panel à droite. Sections : Blood, Body Parts, Skills, Inventory (foldable), Global Actions.
+Priorité du raycast clic : **WorldItem > Harvestable > sol**. Tous via `GetComponentInParent<T>` — pas de layer requis.
+
+### 4. Tester Santé/Skills/Inventory/Récolte
+- **F1** ouvre le panel à droite. Sections : Blood, Body Parts, Skills, Inventory (foldable), Harvestables (foldable), Global Actions.
 - Boutons par partie : Damage 10/30/100, Bandage, Heal 50.
 - Boutons par skill : +50 XP, +500 XP.
 - Inventory : Add 1/Add 10 pour chaque item du Database, Drop 1/Drop All par stack, Clear, Spawn 3 items.
+- Harvestables : liste de tous les noeuds en scène avec HP courant, bouton Reset par noeud, bouton "Reset all".
 - Globaux : Drain Blood, Restore Blood, KILL, REVIVE, RESET.
 - Readouts : tous les modifier getters + `weight speed x` affichés en live.
+
+Cycle de test rapide : Add stone_axe (debug) → clic sur arbre → unité s'y rend, chip-chip-chip, arbre tombe, 3-5 bûches éparpillées → clic sur les bûches (PickupOrder) → inventaire se remplit, vitesse plonge si overweight, Strength XP monte.
 
 ---
 
 ## Anti-patterns connus (à ne pas reproduire)
 
-- `Time.deltaTime` dans `Health`, `Skills`, `Items`, `Unit`, `OrderQueue`, ou tout futur gameplay → **utiliser `GameTime.DeltaTime`**.
+- `Time.deltaTime` dans `Health`, `Skills`, `Items`, `Harvesting`, `Unit`, `OrderQueue`, ou tout futur gameplay → **utiliser `GameTime.DeltaTime`**.
 - Logique métier dans `Unit` → **créer un component dédié**.
 - Référence directe entre `HealthSystem`, `SkillSystem`, `Inventory` → **passer par events + bridge**.
 - `Resources.Load` → **utiliser ItemDatabase / refs sérialisées**.
 - Auto-pickup à proximité → **toujours via PickupOrder**.
-- Hardcoder la liste des items en code → **tout via `ItemDatabase` SO**.
+- Hardcoder la liste des items / les stats des harvestables → **tout via SO**.
+- `HarvestOrder` qui ajoute directement à Inventory → **drops passent par WorldItems** (un autre acteur peut les ramasser, save/load les capture).
+- Animations bloquantes pendant la récolte → **MVP : juste agent.isStopped = true, pas d'anim attendue**.
+- Re-bake NavMesh à chaque frame → **uniquement dans MVPSceneSetup**. Le carving runtime de `NavMeshObstacle` gère les destructions.
 - Quantité négative dans un stack → **clamp à 0 (suppression du stack)**.
-- WorldItem qui re-spawn automatiquement → **drops uniques en MVP**.
+- Drops superposés au même pixel → **offset random dans un cercle**.
+- Recréer un Material à chaque tint (WorldItem, Harvestable runtime) → **MaterialPropertyBlock**.
 - Recalculer `EffectiveMaxHP` à chaque frame → **uniquement sur level up (via Recompute)**.
 - Level up = heal gratos → **préserver les ratios** (politique Vitality).
 - Saigner une partie Severed mais avec `BleedRateSevered = 0` → **mettre la valeur dans la SO, pas en dur**.
@@ -404,8 +473,19 @@ Conséquence : `Unit` accepte tous ces composants sans modification, et `IOrder`
 
 - **TimeScale (slow-mo)** : `GameTime.TimeScale` est exposé mais `NavMeshAgent` n'utilise pas notre delta time. Pour un vrai slow-mo, il faudra moduler `agent.speed *= GameTime.TimeScale` côté bridge.
 - **Pas de Cinemachine** : non installé. La caméra custom suffit.
-- **Pas d'asmdef** : tout part dans `Assembly-CSharp`. Si la compilation devient longue, on découpera. Dépendances actuelles : `Health → Units` ; `Skills → Health + Units` ; `Items → Units` (PickupOrder + Inventory.GetComponent) ; `Skills → Items` (Bridge utilise Inventory) ; `PlayerInput → Units + Items + Items.Orders` ; `Debug → Health + Skills + Items + Units`.
+- **Pas d'asmdef** : tout part dans `Assembly-CSharp`. Si la compile devient lente on découpera. Dépendances actuelles :
+  - `Health → Units`
+  - `Skills → Health + Items`
+  - `Items → Units` (PickupOrder)
+  - `Harvesting → Items + Skills + Units`
+  - `PlayerInput → Units + Items + Harvesting`
+  - `Debug → Health + Skills + Items + Harvesting + Units`
 - **Pas de sélection multi-unités** : MVP mono-unité. `PlayerInputController` cherche le 1er Unit de la scène en fallback.
-- **Material per-instance pour WorldItem générique** : chaque spawn alloue un Material (légère GC + bloat scène si beaucoup d'items). À optimiser via `MaterialPropertyBlock` si ça devient problématique.
-- **WorldItem doublonnent au sol** : si on drop 2× le même item, on a 2 cubes superposés. Acceptable pour MVP. Possible amélioration : merge spatial des piles de même `ItemData` à proximité.
-- **Revive après mort par dégât vital (Head/Torso à 0)** : Revive remplit les HP donc fonctionne — mais sémantiquement on "ressuscite avec une tête neuve". Si on veut un système de cicatrices/handicaps persistants, ajouter un flag à `BodyPartHealth`.
+- **WorldItem dropped quantity invisible** : la pile au sol ne montre pas sa qty. La fusion via `Inventory.DropStack` est correcte mais on ne *voit* pas que la pile contient 5+ items. À régler avec un worldspace TMP label.
+- **Edit-mode preview des WorldItems** : depuis Session 4, ils apparaissent en gris dans l'éditeur (le tint via MPB se fait au Play). Acceptable, mais si gênant : remettre une création d'asset Material par couleur.
+- **Pickup range fixe à 1.5m** dans `PickupOrder` (constante), pas exposée. À aligner avec une éventuelle valeur sur `ItemData` ou `Unit` si on veut moduler par taille de l'unité.
+- **Harvestable durabilité d'outil** : pas de consommation. À ajouter quand `ItemData` aura une notion de `Durability`.
+- **Harvestable respawn** : aucun pour le MVP. Module 7.
+- **Multi-tools acceptés** par Harvestable : un seul outil requis. Quand on aura plusieurs paliers (hache bronze, hache fer), passer à `List<ItemData> AcceptedTools`.
+- **Pas d'anim de récolte** : l'unité reste figée pendant qu'elle "frappe". Visuellement médiocre, fonctionnellement correct.
+- **Fishing spot collider inflated** : la box collider/obstacle est verticale à 2m pour bloquer la bake, alors que le visuel est plat. Click acceptable, mais sémantiquement c'est un "mur invisible au-dessus de l'eau".
