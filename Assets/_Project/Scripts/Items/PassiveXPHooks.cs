@@ -25,8 +25,12 @@ namespace Project.Items
         [SerializeField, Min(0f)] float speedXPPerSecondMoving = 0.1f;
 
         [Header("Strength training while carrying")]
-        [Tooltip("Maximum Strength XP per second when moving with a 100%-full inventory. Scales linearly down to 0 at an empty inventory. Overweight loads (ratio > 1) are clamped to this max — the speed penalty already punishes them on its own.")]
+        [Tooltip("Maximum Strength XP per second once the load curve hits 100%. Reached when WeightRatio >= loadStrengthThresholdMax.")]
         [SerializeField, Min(0f)] float loadStrengthXPPerSecondAtFull = 0.15f;
+        [Tooltip("WeightRatio below which no Strength XP is granted. Carrying almost nothing trains nothing.")]
+        [SerializeField, Range(0f, 1f)] float loadStrengthThresholdMin = 0.10f;
+        [Tooltip("WeightRatio at and above which Strength XP gain is at the max rate. The interval [min, max] is a linear ramp; anything beyond max stays at full.")]
+        [SerializeField, Range(0f, 1f)] float loadStrengthThresholdMax = 0.90f;
 
         SkillSystem _skills;
         Inventory _inventory;
@@ -50,13 +54,15 @@ namespace Project.Items
 
             _skills.GainXP(SkillType.Speed, speedXPPerSecondMoving * dt);
 
-            // Strength XP scales linearly with inventory fill: 0 at empty,
-            // max at full. Overweight loads stay capped at max (the speed
-            // penalty + the red bar already carry the "you carry too much"
-            // signal — no need to double-dip XP gain on top).
+            // Strength XP follows a flat-tailed linear ramp on WeightRatio:
+            //   0 below loadStrengthThresholdMin (~10%): tiny loads don't train
+            //   linear lerp 0→1 across [min, max]
+            //   1 at and above loadStrengthThresholdMax (~90%): full reward
+            // Overweight stays at the max — the speed penalty already
+            // punishes excess load on its own.
             if (_inventory != null)
             {
-                float loadFactor = Mathf.Clamp01(_inventory.WeightRatio);
+                float loadFactor = Mathf.InverseLerp(loadStrengthThresholdMin, loadStrengthThresholdMax, _inventory.WeightRatio);
                 if (loadFactor > 0f)
                 {
                     _skills.GainXP(SkillType.Strength, loadStrengthXPPerSecondAtFull * loadFactor * dt);

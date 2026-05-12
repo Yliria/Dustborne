@@ -75,8 +75,9 @@ Tous les modules suivants se branchent dessus sans modifier ces fondations.
 
 PassiveXPHooks (séparé du Bridge depuis Session 4) tient le tick :
    - Mouvement              → +Speed XP (0.1 / sec)
-   - Mouvement + charge     → +Strength XP (0.15 × clamp01(weightRatio) / sec)
-                               → 0 si vide, max si plein, capé au max si overweight
+   - Mouvement + charge     → +Strength XP (0.15 × InverseLerp(0.10, 0.90, ratio) / sec)
+                               → 0 si ratio ≤ 10%, lerp linéaire 10→90%, max au-dessus de 90% (overweight inclus)
+                               → thresholds réglables dans l'inspector
    - (futur)                → +Hunger, Cold, Posture, etc.
 ```
 
@@ -172,7 +173,7 @@ Variante `GainXPIgnoringPause()` pour les boutons debug.
 | `OnDamageTaken` + Ranged | Dexterity (att.) | `info.Amount × 0.6` |
 | `OnDamageTaken` + Unarmed | Strength (att.) | `info.Amount × 0.3` |
 | velocity > 0.1 (Update) | Speed | `0.1 / sec` |
-| velocity > 0.1 + load > 0 | Strength | `0.15 × clamp01(WeightRatio) / sec` — 0 vide, max plein, capé plein si overweight |
+| velocity > 0.1 + load assez lourd | Strength | `0.15 × InverseLerp(0.10, 0.90, WeightRatio) / sec` — dead zone <10%, lerp 10→90%, capé plein si ≥90% (overweight inclus) |
 | (futur HarvestOrder) | Labour | `appel manuel skills.GainXP(Labour, X)` |
 | (futur CraftOrder) | Labour | `idem` |
 
