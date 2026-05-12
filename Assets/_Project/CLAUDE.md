@@ -412,6 +412,8 @@ Assets/_Project/
     Debug/                      Project.DebugUI
       GameTimeDebugUI.cs        HUD top-left
       HealthSkillsDebugPanel.cs F1 toggle, paper-doll + Inventory + Harvestables + Crafting + buttons
+    UI/                         Project.UI
+      FloatingTextService.cs    world-anchored toasts (pickup/error/info)
     Editor/                     Project.EditorTools
       MVPSceneSetup.cs          Tools menu builder
   ScriptableObjects/
@@ -521,6 +523,16 @@ Cycle de test "from scratch to crossbow" :
 3. Va devant le Workbench (clic Craft Spear Stone) → l'unité s'y rend, 6s de progress → spear_stone produit, +10 XP Labour. Inputs (wood_log×2 + stone_chunk×1) retirés.
 4. Add Labour XP via debug → temps de craft visiblement réduit sur la recette suivante.
 
+**Feedback visuel** : `FloatingTextService` (sur GameSystems) affiche des toasts world-anchored au-dessus de l'unité :
+- Pickup réussi → vert, `+N <Item>` (ex: `+3 Wood Log`).
+- Output de craft → vert (idem, un par output).
+- Outil manquant (harvest) → rouge, `Tool required: <Item>`.
+- Input manquant (craft) → rouge, `Missing: <Item> ×N`.
+- Pas de station (craft) → rouge, `No Workbench found`.
+- Inputs disparus pendant un craft → rouge, `Inputs lost: <Item> ×N`.
+
+Les toasts utilisent `Time.unscaledTime` — ils continuent d'animer/fader même pendant la pause (UI pure, hors gameplay clock). Rendu via OnGUI (pas de prefab/Canvas/TMP — IMGUI suffit au scale actuel).
+
 ---
 
 ## Anti-patterns connus (à ne pas reproduire)
@@ -561,6 +573,8 @@ Cycle de test "from scratch to crossbow" :
   - `Crafting → Items + Skills + Units`
   - `PlayerInput → Units + Items + Harvesting`
   - `Debug → Health + Skills + Items + Harvesting + Crafting + PlayerInput + Units`
+  - `UI → (no inbound)` — toast service called by gameplay; pure service.
+  - Orders (`Items.Orders`, `Harvesting.Orders`, `Crafting.Orders`) → `UI` for toast spawns.
 - **Pas de sélection multi-unités** : MVP mono-unité. `PlayerInputController` cherche le 1er Unit de la scène en fallback.
 - **WorldItem dropped quantity invisible** : la pile au sol ne montre pas sa qty. La fusion via `Inventory.DropStack` est correcte mais on ne *voit* pas que la pile contient 5+ items. À régler avec un worldspace TMP label.
 - **Edit-mode preview des WorldItems** : depuis Session 4, ils apparaissent en gris dans l'éditeur (le tint via MPB se fait au Play). Acceptable, mais si gênant : remettre une création d'asset Material par couleur.

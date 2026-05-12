@@ -9,6 +9,7 @@ using Project.Health;
 using Project.Items;
 using Project.PlayerInput;
 using Project.Skills;
+using Project.UI;
 using Project.Units;
 using Unity.AI.Navigation;
 using UnityEditor;
@@ -424,6 +425,9 @@ namespace Project.EditorTools
             var wisSO = new SerializedObject(worldItemService);
             wisSO.FindProperty("genericPrefab").objectReferenceValue = worldItemGenericPrefab;
             wisSO.ApplyModifiedPropertiesWithoutUndo();
+
+            // World-anchored toast text used by Pickup/Harvest/Craft feedback.
+            go.AddComponent<FloatingTextService>();
 
             var debugUI = go.AddComponent<GameTimeDebugUI>();
             var debugSO = new SerializedObject(debugUI);

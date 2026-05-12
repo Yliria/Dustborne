@@ -1,5 +1,6 @@
 using Project.Items;
 using Project.Skills;
+using Project.UI;
 using Project.Units;
 using UnityEngine;
 
@@ -88,6 +89,9 @@ namespace Project.Crafting.Orders
                 if (!_inventory.Has(input.Def, input.Quantity))
                 {
                     Debug.LogWarning($"[CraftOrder] Missing input for '{_recipe.Id}': {input.Def.Id} ×{input.Quantity}.");
+                    FloatingTextService.SpawnError(
+                        $"Missing: {input.Def.DisplayName} ×{input.Quantity}",
+                        unit.transform.position + Vector3.up * 2f);
                     _failedAtStart = true;
                     return;
                 }
@@ -101,6 +105,9 @@ namespace Project.Crafting.Orders
                 if (_targetStation == null)
                 {
                     Debug.LogWarning($"[CraftOrder] No active {stationType} station in scene for '{_recipe.Id}'.");
+                    FloatingTextService.SpawnError(
+                        $"No {stationType} found",
+                        unit.transform.position + Vector3.up * 2f);
                     _failedAtStart = true;
                     return;
                 }
@@ -186,6 +193,9 @@ namespace Project.Crafting.Orders
                 if (!_inventory.Has(input.Def, input.Quantity))
                 {
                     Debug.LogWarning($"[CraftOrder] Inputs vanished during craft of '{_recipe.Id}' — {input.Def.Id} ×{input.Quantity} missing.");
+                    FloatingTextService.SpawnError(
+                        $"Inputs lost: {input.Def.DisplayName} ×{input.Quantity}",
+                        unit.transform.position + Vector3.up * 2f);
                     return OrderStatus.Failed;
                 }
             }
@@ -205,6 +215,10 @@ namespace Project.Crafting.Orders
                 var output = _recipe.Outputs[i];
                 if (output == null || output.Def == null) continue;
                 _inventory.Add(output.Def, output.Quantity);
+                FloatingTextService.SpawnPickup(
+                    output.Def.DisplayName,
+                    output.Quantity,
+                    unit.transform.position + Vector3.up * 2f);
             }
 
             // XP grant once, at completion only (per spec — discourages

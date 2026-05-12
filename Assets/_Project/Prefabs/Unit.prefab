@@ -379,4 +379,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Project.Items.PassiveXPHooks
   movementVelocityThreshold: 0.1
   speedXPPerSecondMoving: 0.1
-  overweightStrengthXPPerSecond: 0.15
+  loadStrengthXPPerSecondAtFull: 0.15
+  loadStrengthThresholdMin: 0.1
+  loadStrengthThresholdMax: 0.9
