@@ -61,6 +61,13 @@ namespace Project.DebugUI
             {
                 _style.normal.textColor = new Color(1f, 0.75f, 0.2f);
                 GUI.Label(new Rect(pad, y, 320f, fontSize + 6f), "[Shift] QUEUE +", _style);
+                y += fontSize + 6f;
+            }
+
+            if (DamageInputMode.IsActive)
+            {
+                _style.normal.textColor = new Color(1f, 0.30f, 0.30f);
+                GUI.Label(new Rect(pad, y, 320f, fontSize + 6f), "DAMAGE MODE", _style);
             }
         }
     }

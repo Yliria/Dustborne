@@ -117,6 +117,8 @@ namespace Project.DebugUI
             GUILayout.Space(8);
             DrawParts();
             GUILayout.Space(8);
+            DrawDamageInput();
+            GUILayout.Space(8);
             DrawSkills();
             GUILayout.Space(8);
             DrawInventory();
@@ -172,6 +174,46 @@ namespace Project.DebugUI
         {
             var part = _health.GetPart(id);
             if (part != null) DrawPartRow(part);
+        }
+
+        // ---- Damage input mode ----
+
+        void DrawDamageInput()
+        {
+            bool active = DamageInputMode.IsActive;
+            string state = active
+                ? "<color=#ff7070>ACTIVE — click a body part to damage it</color>"
+                : "<i>off — clicks behave normally (Move / Pickup / Harvest)</i>";
+
+            GUILayout.Label("<b>DAMAGE INPUT MODE</b>", _header);
+            GUILayout.Label(state, _smallRich);
+
+            // Toggle.
+            bool newActive = GUILayout.Toggle(active, "  Click to damage body part");
+            if (newActive != active) DamageInputMode.IsActive = newActive;
+
+            // Amount slider.
+            GUILayout.BeginHorizontal();
+            GUILayout.Label($"Amount: {DamageInputMode.DamageAmount:0}", _smallRich, GUILayout.Width(110f));
+            DamageInputMode.DamageAmount = GUILayout.HorizontalSlider(DamageInputMode.DamageAmount, 1f, 200f);
+            GUILayout.EndHorizontal();
+
+            // DamageType picker.
+            GUILayout.BeginHorizontal();
+            GUILayout.Label($"Type: <b>{DamageInputMode.Type}</b>", _smallRich, GUILayout.Width(110f));
+            if (GUILayout.Toggle(DamageInputMode.Type == DamageType.Blunt,  " Blunt",  GUILayout.Width(70f)))  DamageInputMode.Type = DamageType.Blunt;
+            if (GUILayout.Toggle(DamageInputMode.Type == DamageType.Slash,  " Slash",  GUILayout.Width(70f)))  DamageInputMode.Type = DamageType.Slash;
+            if (GUILayout.Toggle(DamageInputMode.Type == DamageType.Pierce, " Pierce", GUILayout.Width(70f)))  DamageInputMode.Type = DamageType.Pierce;
+            GUILayout.EndHorizontal();
+
+            // WeaponCategory picker.
+            GUILayout.BeginHorizontal();
+            GUILayout.Label($"Weapon: <b>{DamageInputMode.Weapon}</b>", _smallRich, GUILayout.Width(110f));
+            if (GUILayout.Toggle(DamageInputMode.Weapon == WeaponCategory.Unarmed,   " Unarmed",   GUILayout.Width(80f)))  DamageInputMode.Weapon = WeaponCategory.Unarmed;
+            if (GUILayout.Toggle(DamageInputMode.Weapon == WeaponCategory.Melee,     " Melee",     GUILayout.Width(60f)))  DamageInputMode.Weapon = WeaponCategory.Melee;
+            if (GUILayout.Toggle(DamageInputMode.Weapon == WeaponCategory.MeleeFast, " MeleeFast", GUILayout.Width(85f)))  DamageInputMode.Weapon = WeaponCategory.MeleeFast;
+            if (GUILayout.Toggle(DamageInputMode.Weapon == WeaponCategory.Ranged,    " Ranged",    GUILayout.Width(70f)))  DamageInputMode.Weapon = WeaponCategory.Ranged;
+            GUILayout.EndHorizontal();
         }
 
         void DrawPartRow(BodyPartHealth p)

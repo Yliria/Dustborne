@@ -1,6 +1,8 @@
 using Project.Core;
+using Project.DebugUI;
 using Project.Harvesting;
 using Project.Harvesting.Orders;
+using Project.Health;
 using Project.Items;
 using Project.Items.Orders;
 using Project.Units;
@@ -28,13 +30,33 @@ namespace Project.PlayerInput
         [SerializeField] GameObject queuedMoveMarkerPrefab;
 
         [Header("Raycast")]
+        [Tooltip("Mask used by the normal click pipeline (MoveOrder / PickupOrder / HarvestOrder). The HitZones layer is removed from it at Awake so clicks on the Poucou body pass through to the ground.")]
         [SerializeField] LayerMask groundMask = ~0;
         [SerializeField] float maxRayDistance = 500f;
+
+        int _normalRaycastMask;
+        int _hitZonesMask;
 
         void Awake()
         {
             if (worldCamera == null) worldCamera = Camera.main;
             if (unit == null) unit = FindFirstObjectByType<Unit>();
+
+            int hitZonesLayer = LayerMask.NameToLayer("HitZones");
+            if (hitZonesLayer < 0)
+            {
+                Debug.LogWarning("[PlayerInputController] 'HitZones' layer not found. Click-to-damage will be a no-op until the layer is registered by MVPSceneSetup.");
+                _hitZonesMask = 0;
+                _normalRaycastMask = groundMask;
+            }
+            else
+            {
+                _hitZonesMask = 1 << hitZonesLayer;
+                // Normal pipeline excludes HitZones — clicks on a body part
+                // should fall through to ground / WorldItem / Harvestable
+                // unless damage mode is active.
+                _normalRaycastMask = groundMask & ~_hitZonesMask;
+            }
         }
 
         void Update()
@@ -63,7 +85,17 @@ namespace Project.PlayerInput
 
             Vector2 screenPos = mouse.position.ReadValue();
             Ray ray = worldCamera.ScreenPointToRay(screenPos);
-            if (!Physics.Raycast(ray, out RaycastHit hit, maxRayDistance, groundMask, QueryTriggerInteraction.Ignore))
+
+            // Damage mode short-circuits everything else. Raycast only against
+            // the HitZones layer; if we hit a body part, deliver damage and
+            // bail — no MoveOrder, no PickupOrder, no HarvestOrder.
+            if (DamageInputMode.IsActive)
+            {
+                HandleDamageClick(ray);
+                return;
+            }
+
+            if (!Physics.Raycast(ray, out RaycastHit hit, maxRayDistance, _normalRaycastMask, QueryTriggerInteraction.Ignore))
                 return;
 
             bool append = false;
@@ -96,6 +128,26 @@ namespace Project.PlayerInput
                 : moveMarkerPrefab;
 
             unit.IssueOrder(new MoveOrder(hit.point, prefab), append);
+        }
+
+        void HandleDamageClick(Ray ray)
+        {
+            if (_hitZonesMask == 0) return; // layer missing, nothing to hit
+
+            if (!Physics.Raycast(ray, out RaycastHit hit, maxRayDistance, _hitZonesMask, QueryTriggerInteraction.Ignore))
+                return;
+
+            var hitZone = HitZone.FromCollider(hit.collider);
+            if (hitZone == null) return;
+
+            hitZone.TakeHit(new DamageInfo
+            {
+                Amount = DamageInputMode.DamageAmount,
+                Type = DamageInputMode.Type,
+                Weapon = DamageInputMode.Weapon,
+                Attacker = null
+                // TargetPart is set by HitZone.TakeHit from the zone's own PartId.
+            });
         }
 
         public static bool IsShiftHeld()

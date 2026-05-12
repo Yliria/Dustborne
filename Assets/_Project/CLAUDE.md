@@ -8,7 +8,7 @@ Sessions livrées :
 - **Session 3** — Items, Inventaire au poids, Pickup, intégration vitesse/XP, Revive.
 - **Session 4** — Dette technique (MPB, drop merge, dédup, extraction PassiveXPHooks) + Récolte (Harvestable, HarvestOrder, 9 noeuds en scène).
 - **Session 5** — Crafting (RecipeDefinition + RecipeDatabase + CraftingStation + CraftOrder, hand-craft & workbench, 9 recettes, 1 Workbench en scène, bandage + 5 armes placeholders).
-- **Session 5.5** — Poucou chibi visuel (15 segments en primitives, ~0.95m, tête disproportionnée) + body parts étendues à 11 (mains + pieds), cascade Severed anatomique, BodyPartVisual avec MPB tinting.
+- **Session 5.5** — Poucou chibi visuel (15 segments en primitives, ~0.95m, tête disproportionnée) + body parts étendues à 11 (mains + pieds), cascade Severed anatomique, BodyPartVisual avec MPB tinting, HitZones par segment + layer dédié + mode debug click-to-damage.
 
 Tous les modules suivants se branchent dessus sans modifier ces fondations.
 
@@ -167,7 +167,23 @@ Ex : `LegLeft.Broken` (0.30) + `FootLeft.Broken` (0.15) = `0.70 × 0.85 = 0.595`
 - Plusieurs `BodyPartVisual` peuvent cibler le même `BodyPartId` (typique : upper-arm + forearm tous deux bindés à `ArmLeft`, retintés ensemble par le même event).
 - `HealthSystem.Revive()` fire `OnPartStateChanged` pour tous les parts qui transitent → les renderers re-enable et reprennent leur couleur.
 - **Pas de Material clone** : un seul `Mat_Poucou.mat` partagé par les 15 segments ; MPB par instance.
-- **Pas de hit collider par part** : un `CapsuleCollider` englobant sur la racine du Unit suffit pour clic + pathfinding. Les hit colliders par part arrivent en Module 6 (Combat).
+
+### Hit zones (Session 5.5)
+- Chaque segment renderable porte un **`CapsuleCollider`** dimensionné via `ConfigureHitCapsule` (`radius=0.5, height=1` pour les sphères, `radius=0.5, height=2` dir Y pour les cylindres, `dir Z` pour les pieds parce qu'ils s'étendent vers l'avant) et un **`HitZone`** component pointant vers le `HealthSystem` racine.
+- Tous les segments sont assignés au layer **"HitZones"**, créé automatiquement par `MVPSceneSetup.EnsureHitZonesLayer` (premier slot user libre ≥ 8 dans `ProjectSettings/TagManager.asset`).
+- **Pas de collider sur la racine Unit** : c'est volontaire, les HitZones suffisent. Évite les doubles-hits et conflits.
+- `HitZone.TakeHit(DamageInfo)` force `info.TargetPart = PartId` puis route vers `HealthSystem.ApplyDamage`. **Zéro logique métier dedans** — pas de rolls, pas d'inspection d'arme, pas de lecture inventaire.
+- Helper static `HitZone.FromCollider(Collider)` walks le parent chain — utilisable depuis n'importe quel raycast/overlap/collision.
+- **Pas de couplage avec SkillSystem ou Inventory** : uniquement HealthSystem. C'est un pure adapter "hit physics → damage pipeline".
+
+### Mode click-to-damage (debug)
+- `Project.DebugUI.DamageInputMode` static : `IsActive`, `DamageAmount`, `Type`, `Weapon`. Écrit par le debug panel, lu par `PlayerInputController`.
+- **`PlayerInputController`** cache deux masks à Awake :
+  - `_normalRaycastMask = groundMask & ~HitZones` — pour les clics normaux (Move/Pickup/Harvest). Les clics sur le Poucou passent à travers vers le sol.
+  - `_hitZonesMask = layer HitZones uniquement` — pour le mode damage.
+- Si `DamageInputMode.IsActive`, le clic ne fait que `Physics.Raycast(_hitZonesMask)` puis `HitZone.FromCollider(hit)?.TakeHit(...)`. Pas de MoveOrder/PickupOrder/HarvestOrder dans ce mode.
+- Le HUD top-left (`GameTimeDebugUI`) affiche un badge rouge **"DAMAGE MODE"** quand le mode est actif, pour ne pas oublier qu'on est en debug.
+- Le debug panel F1 a une section dédiée : toggle, slider amount (1–200), pickers Type (Blunt/Slash/Pierce) et Weapon (Unarmed/Melee/MeleeFast/Ranged).
 
 ### Menu de rebuild rapide
 `Tools → RTS MVP → Rebuild Unit Visual` régénère uniquement la hiérarchie `Visual` du prefab Unit (sans toucher aux components ou aux refs SO). Pratique pour itérer sur les proportions / couleurs du Poucou. Le NavMeshAgent et le CapsuleCollider ne sont **pas** retouchés par ce menu — si on change la hauteur du Poucou, il faut aussi mettre à jour ces deux composants en éditant `BuildUnitPrefab` puis relancer `Build Scene And Prefabs`.
@@ -407,6 +423,7 @@ Assets/_Project/
       BloodSystem.cs            runtime state
       HealthSystem.cs           MonoBehaviour (cascade + multiplicative mobility)
       BodyPartVisual.cs         MPB tinter on each renderable segment
+      HitZone.cs                marker + TakeHit adapter on each renderable segment
     Skills/                     Project.Skills
       SkillType.cs              enum
       SkillData.cs              runtime state
@@ -442,7 +459,8 @@ Assets/_Project/
       PlayerInputController.cs  raycast click → PickupOrder | HarvestOrder | MoveOrder
     Debug/                      Project.DebugUI
       GameTimeDebugUI.cs        HUD top-left
-      HealthSkillsDebugPanel.cs F1 toggle, paper-doll + Inventory + Harvestables + Crafting + buttons
+      HealthSkillsDebugPanel.cs F1 toggle, paper-doll + Damage mode + Inventory + Harvestables + Crafting + buttons
+      DamageInputMode.cs        static state for the click-to-damage mode
     UI/                         Project.UI
       FloatingTextService.cs    world-anchored toasts (pickup/error/info/levelup)
       UnitFeedbackToasts.cs     unit-event → toast bridge (SkillSystem.OnLevelUp etc.)
@@ -596,7 +614,8 @@ Les toasts utilisent `Time.unscaledTime` — ils continuent d'animer/fader même
 - Pop-up de level up bloquant → **passif, juste event + UI update**.
 - `FindObjectOfType` répété en runtime → **cacher la ref (cf. `CraftingStation.ActiveStations` registry pattern)**.
 - UI worldspace pour interagir avec les stations → **post-MVP, le debug panel suffit pour l'instant**.
-- Hit colliders par body part → **réservé Module 6 Combat**. Pour l'instant un seul `CapsuleCollider` englobant sur la racine du Unit.
+- **Collider sur la racine Unit** → retiré en S5.5, **les HitZones par segment sont les seuls click targets**. Ne pas réintroduire un collider racine (risque de double-hit / conflict avec les HitZones).
+- Logique métier dans `HitZone` → **adapter pur**. Pas de rolls, pas de weapon-inspect, pas d'inventory read. Construire la `DamageInfo` côté caller (combat / debug click).
 - Cascade Severed inverse (HandLeft severed → ArmLeft severed) → **uniquement parent → child**, jamais l'inverse.
 - Modifier `NavMeshAgent.baseOffset` au runtime → **set à 0 une fois pour toutes dans le prefab**, les pieds sur le sol.
 - Cloner des Materials pour le Poucou → **un seul `Mat_Poucou.mat` partagé, MPB par renderer**.
@@ -615,7 +634,7 @@ Les toasts utilisent `Time.unscaledTime` — ils continuent d'animer/fader même
   - `Harvesting → Items + Skills + Units`
   - `Crafting → Items + Skills + Units`
   - `PlayerInput → Units + Items + Harvesting`
-  - `Debug → Health + Skills + Items + Harvesting + Crafting + PlayerInput + Units`
+  - `Debug → Health + Skills + Items + Harvesting + Crafting + PlayerInput + Units` (+ `DamageInputMode` lu par `PlayerInput`, ergo dépendance bidirectionnelle légère acceptée pour MVP)
   - `UI → (no inbound)` — toast service called by gameplay; pure service.
   - Orders (`Items.Orders`, `Harvesting.Orders`, `Crafting.Orders`) → `UI` for toast spawns.
 - **Pas de sélection multi-unités** : MVP mono-unité. `PlayerInputController` cherche le 1er Unit de la scène en fallback.
@@ -633,4 +652,4 @@ Les toasts utilisent `Time.unscaledTime` — ils continuent d'animer/fader même
 - **Pas d'anim de craft** : l'unité reste figée comme pour Harvest. `LookAt` cosmétique uniquement.
 - **Poucou raide** : pas de rigging Mecanim, les bras pendent verticalement, les pieds ne pivotent pas, pas d'idle bobbing. À reprendre avec un mesh rigged si on veut animer. La hiérarchie actuelle ne suit pas la convention humanoid Unity.
 - **Severed parts juste disabled** : les membres sectionnés sont invisibles, pas détachés physiquement. Pour un effet "membre qui tombe au sol" il faudrait re-parent + Rigidbody. Module 6+.
-- **Pas de hit colliders par part** : Module 6 (Combat). Pour l'instant un seul CapsuleCollider sur la racine, les dégâts sont dispatchés via `DamageInfo.TargetPart` par le caller (debug panel today, AttackOrder demain).
+- **Hit zones MVP** : CapsuleColliders sur chaque segment + layer HitZones dédié. Le mode click-to-damage du debug panel teste tout le pipeline. **Module 6 (Combat)** consommera la même infra côté AttackOrder/projectiles via `HitZone.FromCollider`. Pas de damage numbers flottants au-dessus du hit point encore — ils peuvent venir gratuitement en branchant `FloatingTextService.Spawn(hitZone.transform.position, ...)` dans HitZone.TakeHit si désiré.
