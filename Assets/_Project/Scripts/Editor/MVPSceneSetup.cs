@@ -128,15 +128,11 @@ namespace Project.EditorTools
             // still hit the unit.
             var go = new GameObject("Unit");
 
-            // Sized to the Poucou chibi silhouette: ~0.95 m tall, ~0.50 m wide.
-            // The CapsuleCollider wraps the whole body so PlayerInputController
-            // raycasts and physics queries land on the unit regardless of which
-            // segment the cursor hovers.
-            var col = go.AddComponent<CapsuleCollider>();
-            col.center = new Vector3(0f, 0.475f, 0f);
-            col.height = 0.95f;
-            col.radius = 0.25f;
-            col.direction = 1; // Y axis
+            // No root Collider — clicks and physics queries route through
+            // per-segment HitZones (CapsuleColliders on the Visual children)
+            // on the dedicated "HitZones" layer. PlayerInputController uses a
+            // layer mask to choose between normal clicks (excluding HitZones)
+            // and damage-mode clicks (only HitZones).
 
             var agent = go.AddComponent<NavMeshAgent>();
             agent.radius = 0.25f;
@@ -247,6 +243,11 @@ namespace Project.EditorTools
         /// Safe to re-run: any existing "Visual" child is destroyed first.
         public static void BuildUnitVisual(GameObject unitRoot)
         {
+            // Strip any leftover root collider from older builds — hit zones
+            // on the body parts are the new click targets, not a body capsule.
+            var rootCol = unitRoot.GetComponent<Collider>();
+            if (rootCol != null) Object.DestroyImmediate(rootCol);
+
             var existing = unitRoot.transform.Find("Visual");
             if (existing != null) Object.DestroyImmediate(existing.gameObject);
 
@@ -262,59 +263,151 @@ namespace Project.EditorTools
                 ProjectRoot + "/Art/Mat_Poucou.mat",
                 new Color(0.92f, 0.84f, 0.62f));
 
+            // Hit-zone wiring: every renderable segment carries a HitZone
+            // pointing at the unit's HealthSystem, on the "HitZones" layer.
+            var health = unitRoot.GetComponent<HealthSystem>();
+            int hitLayer = EnsureHitZonesLayer();
+
             // ---- Centerline ----
-            MakePoucouSphere  (visual.transform, "Head",        new Vector3(0.40f, 0.40f, 0.40f), new Vector3( 0.00f, 0.75f, 0.00f), BodyPartId.Head,    skin);
-            MakePoucouCylinder(visual.transform, "Torso",       new Vector3(0.28f, 0.10f, 0.28f), new Vector3( 0.00f, 0.45f, 0.00f), BodyPartId.Torso,   skin);
-            MakePoucouCylinder(visual.transform, "Abdomen",     new Vector3(0.24f, 0.05f, 0.24f), new Vector3( 0.00f, 0.30f, 0.00f), BodyPartId.Abdomen, skin);
+            MakePoucouSphere  (visual.transform, "Head",        new Vector3(0.40f, 0.40f, 0.40f), new Vector3( 0.00f, 0.75f, 0.00f), BodyPartId.Head,    skin, health, hitLayer);
+            MakePoucouCylinder(visual.transform, "Torso",       new Vector3(0.28f, 0.10f, 0.28f), new Vector3( 0.00f, 0.45f, 0.00f), BodyPartId.Torso,   skin, health, hitLayer);
+            MakePoucouCylinder(visual.transform, "Abdomen",     new Vector3(0.24f, 0.05f, 0.24f), new Vector3( 0.00f, 0.30f, 0.00f), BodyPartId.Abdomen, skin, health, hitLayer);
 
             // ---- Left arm ----
-            MakePoucouCylinder(visual.transform, "UpperArm_L",  new Vector3(0.06f, 0.05f, 0.06f), new Vector3(-0.18f, 0.50f, 0.00f), BodyPartId.ArmLeft,  skin);
-            MakePoucouCylinder(visual.transform, "Forearm_L",   new Vector3(0.05f, 0.05f, 0.05f), new Vector3(-0.19f, 0.40f, 0.00f), BodyPartId.ArmLeft,  skin);
-            MakePoucouSphere  (visual.transform, "Hand_L",      new Vector3(0.10f, 0.10f, 0.10f), new Vector3(-0.20f, 0.32f, 0.00f), BodyPartId.HandLeft, skin);
+            MakePoucouCylinder(visual.transform, "UpperArm_L",  new Vector3(0.06f, 0.05f, 0.06f), new Vector3(-0.18f, 0.50f, 0.00f), BodyPartId.ArmLeft,  skin, health, hitLayer);
+            MakePoucouCylinder(visual.transform, "Forearm_L",   new Vector3(0.05f, 0.05f, 0.05f), new Vector3(-0.19f, 0.40f, 0.00f), BodyPartId.ArmLeft,  skin, health, hitLayer);
+            MakePoucouSphere  (visual.transform, "Hand_L",      new Vector3(0.10f, 0.10f, 0.10f), new Vector3(-0.20f, 0.32f, 0.00f), BodyPartId.HandLeft, skin, health, hitLayer);
 
             // ---- Right arm (mirror x) ----
-            MakePoucouCylinder(visual.transform, "UpperArm_R",  new Vector3(0.06f, 0.05f, 0.06f), new Vector3( 0.18f, 0.50f, 0.00f), BodyPartId.ArmRight,  skin);
-            MakePoucouCylinder(visual.transform, "Forearm_R",   new Vector3(0.05f, 0.05f, 0.05f), new Vector3( 0.19f, 0.40f, 0.00f), BodyPartId.ArmRight,  skin);
-            MakePoucouSphere  (visual.transform, "Hand_R",      new Vector3(0.10f, 0.10f, 0.10f), new Vector3( 0.20f, 0.32f, 0.00f), BodyPartId.HandRight, skin);
+            MakePoucouCylinder(visual.transform, "UpperArm_R",  new Vector3(0.06f, 0.05f, 0.06f), new Vector3( 0.18f, 0.50f, 0.00f), BodyPartId.ArmRight,  skin, health, hitLayer);
+            MakePoucouCylinder(visual.transform, "Forearm_R",   new Vector3(0.05f, 0.05f, 0.05f), new Vector3( 0.19f, 0.40f, 0.00f), BodyPartId.ArmRight,  skin, health, hitLayer);
+            MakePoucouSphere  (visual.transform, "Hand_R",      new Vector3(0.10f, 0.10f, 0.10f), new Vector3( 0.20f, 0.32f, 0.00f), BodyPartId.HandRight, skin, health, hitLayer);
 
             // ---- Left leg ----
-            MakePoucouCylinder(visual.transform, "Thigh_L",     new Vector3(0.08f, 0.06f, 0.08f), new Vector3(-0.07f, 0.18f, 0.00f), BodyPartId.LegLeft,  skin);
-            MakePoucouCylinder(visual.transform, "Shin_L",      new Vector3(0.07f, 0.05f, 0.07f), new Vector3(-0.07f, 0.08f, 0.00f), BodyPartId.LegLeft,  skin);
-            MakePoucouCube    (visual.transform, "Foot_L",      new Vector3(0.10f, 0.04f, 0.14f), new Vector3(-0.07f, 0.02f, 0.04f), BodyPartId.FootLeft, skin);
+            MakePoucouCylinder(visual.transform, "Thigh_L",     new Vector3(0.08f, 0.06f, 0.08f), new Vector3(-0.07f, 0.18f, 0.00f), BodyPartId.LegLeft,  skin, health, hitLayer);
+            MakePoucouCylinder(visual.transform, "Shin_L",      new Vector3(0.07f, 0.05f, 0.07f), new Vector3(-0.07f, 0.08f, 0.00f), BodyPartId.LegLeft,  skin, health, hitLayer);
+            MakePoucouCube    (visual.transform, "Foot_L",      new Vector3(0.10f, 0.04f, 0.14f), new Vector3(-0.07f, 0.02f, 0.04f), BodyPartId.FootLeft, skin, health, hitLayer);
 
             // ---- Right leg (mirror x) ----
-            MakePoucouCylinder(visual.transform, "Thigh_R",     new Vector3(0.08f, 0.06f, 0.08f), new Vector3( 0.07f, 0.18f, 0.00f), BodyPartId.LegRight,  skin);
-            MakePoucouCylinder(visual.transform, "Shin_R",      new Vector3(0.07f, 0.05f, 0.07f), new Vector3( 0.07f, 0.08f, 0.00f), BodyPartId.LegRight,  skin);
-            MakePoucouCube    (visual.transform, "Foot_R",      new Vector3(0.10f, 0.04f, 0.14f), new Vector3( 0.07f, 0.02f, 0.04f), BodyPartId.FootRight, skin);
+            MakePoucouCylinder(visual.transform, "Thigh_R",     new Vector3(0.08f, 0.06f, 0.08f), new Vector3( 0.07f, 0.18f, 0.00f), BodyPartId.LegRight,  skin, health, hitLayer);
+            MakePoucouCylinder(visual.transform, "Shin_R",      new Vector3(0.07f, 0.05f, 0.07f), new Vector3( 0.07f, 0.08f, 0.00f), BodyPartId.LegRight,  skin, health, hitLayer);
+            MakePoucouCube    (visual.transform, "Foot_R",      new Vector3(0.10f, 0.04f, 0.14f), new Vector3( 0.07f, 0.02f, 0.04f), BodyPartId.FootRight, skin, health, hitLayer);
         }
 
-        static void MakePoucouSphere(Transform parent, string name, Vector3 localScale, Vector3 localPos, BodyPartId part, Material mat)
-            => MakePoucouSegment(PrimitiveType.Sphere, parent, name, localScale, localPos, part, mat);
+        static void MakePoucouSphere(Transform parent, string name, Vector3 localScale, Vector3 localPos, BodyPartId part, Material mat, HealthSystem health, int hitLayer)
+            => MakePoucouSegment(PrimitiveType.Sphere, parent, name, localScale, localPos, part, mat, health, hitLayer);
 
-        static void MakePoucouCylinder(Transform parent, string name, Vector3 localScale, Vector3 localPos, BodyPartId part, Material mat)
-            => MakePoucouSegment(PrimitiveType.Cylinder, parent, name, localScale, localPos, part, mat);
+        static void MakePoucouCylinder(Transform parent, string name, Vector3 localScale, Vector3 localPos, BodyPartId part, Material mat, HealthSystem health, int hitLayer)
+            => MakePoucouSegment(PrimitiveType.Cylinder, parent, name, localScale, localPos, part, mat, health, hitLayer);
 
-        static void MakePoucouCube(Transform parent, string name, Vector3 localScale, Vector3 localPos, BodyPartId part, Material mat)
-            => MakePoucouSegment(PrimitiveType.Cube, parent, name, localScale, localPos, part, mat);
+        static void MakePoucouCube(Transform parent, string name, Vector3 localScale, Vector3 localPos, BodyPartId part, Material mat, HealthSystem health, int hitLayer)
+            => MakePoucouSegment(PrimitiveType.Cube, parent, name, localScale, localPos, part, mat, health, hitLayer);
 
-        static void MakePoucouSegment(PrimitiveType primitive, Transform parent, string name, Vector3 localScale, Vector3 localPos, BodyPartId part, Material mat)
+        static void MakePoucouSegment(PrimitiveType primitive, Transform parent, string name, Vector3 localScale, Vector3 localPos, BodyPartId part, Material mat, HealthSystem health, int hitLayer)
         {
             var go = GameObject.CreatePrimitive(primitive);
             go.name = name;
             go.transform.SetParent(parent, false);
             go.transform.localPosition = localPos;
             go.transform.localScale = localScale;
-            // The Poucou has no per-part hit colliders for the MVP (Module 6
-            // will introduce them). The unit's root CapsuleCollider is what
-            // catches clicks and physics queries.
-            Object.DestroyImmediate(go.GetComponent<Collider>());
+
+            // Drop the primitive's auto-collider — we attach a tuned
+            // CapsuleCollider sized to behave well as a hit zone (capsules
+            // give cheap, predictable detection regardless of segment shape).
+            var autoCollider = go.GetComponent<Collider>();
+            if (autoCollider != null) Object.DestroyImmediate(autoCollider);
+
+            var hitCollider = go.AddComponent<CapsuleCollider>();
+            ConfigureHitCapsule(hitCollider, primitive);
+
+            // Hit zone wiring.
+            var hitZone = go.AddComponent<HitZone>();
+            hitZone.SetPart(part);
+            hitZone.SetHealthSystem(health);
+
+            // Layer assignment. Skip silently if the layer couldn't be
+            // created (warning already logged by EnsureHitZonesLayer).
+            if (hitLayer >= 0) go.layer = hitLayer;
 
             var rend = go.GetComponent<Renderer>();
             rend.sharedMaterial = mat;
 
-            var visual = go.AddComponent<BodyPartVisual>();
-            visual.TargetPart = part;
-            visual.Renderer = rend;
+            var bodyVisual = go.AddComponent<BodyPartVisual>();
+            bodyVisual.TargetPart = part;
+            bodyVisual.Renderer = rend;
+        }
+
+        static void ConfigureHitCapsule(CapsuleCollider capsule, PrimitiveType primitive)
+        {
+            // Local-space (radius, height) at primitive scale 1. The transform
+            // localScale stretches them at runtime to wrap the visible mesh.
+            switch (primitive)
+            {
+                case PrimitiveType.Sphere:
+                    // Degenerate capsule = sphere when height = 2 × radius.
+                    capsule.radius = 0.5f;
+                    capsule.height = 1.0f;
+                    capsule.direction = 1; // Y
+                    break;
+                case PrimitiveType.Cube:
+                    // Used for feet: capsule lies along Z (forward axis) so it
+                    // matches the foot's depth instead of its height.
+                    capsule.radius = 0.5f;
+                    capsule.height = 2.0f;
+                    capsule.direction = 2; // Z
+                    break;
+                default: // Cylinder
+                    capsule.radius = 0.5f;
+                    capsule.height = 2.0f;
+                    capsule.direction = 1; // Y
+                    break;
+            }
+        }
+
+        // ---- HitZones layer ----
+
+        const string HitZonesLayerName = "HitZones";
+
+        /// Returns the layer index for "HitZones", creating it on the first
+        /// free user slot (≥ 8) if absent. Idempotent and safe to call from
+        /// every BuildUnitVisual run.
+        static int EnsureHitZonesLayer()
+        {
+            int idx = LayerMask.NameToLayer(HitZonesLayerName);
+            if (idx >= 0) return idx;
+
+            var tagAssets = AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/TagManager.asset");
+            if (tagAssets == null || tagAssets.Length == 0)
+            {
+                Debug.LogError("[MVPSceneSetup] Could not load ProjectSettings/TagManager.asset — 'HitZones' layer not created.");
+                return -1;
+            }
+
+            var so = new SerializedObject(tagAssets[0]);
+            var layers = so.FindProperty("layers");
+            if (layers == null || !layers.isArray)
+            {
+                Debug.LogError("[MVPSceneSetup] TagManager.asset has no 'layers' array — 'HitZones' layer not created.");
+                return -1;
+            }
+
+            // Slots 0–7 are reserved by Unity (Default, TransparentFX, Ignore
+            // Raycast, blank, Water, UI, blank, blank). User layers start at 8.
+            for (int i = 8; i < layers.arraySize; i++)
+            {
+                var slot = layers.GetArrayElementAtIndex(i);
+                if (string.IsNullOrEmpty(slot.stringValue))
+                {
+                    slot.stringValue = HitZonesLayerName;
+                    so.ApplyModifiedProperties();
+                    AssetDatabase.SaveAssets();
+                    Debug.Log($"[MVPSceneSetup] Created layer '{HitZonesLayerName}' at slot {i}.");
+                    return i;
+                }
+            }
+
+            Debug.LogError($"[MVPSceneSetup] No free user layer slot available for '{HitZonesLayerName}'.");
+            return -1;
         }
 
         // ---- Standalone visual rebuild ----
