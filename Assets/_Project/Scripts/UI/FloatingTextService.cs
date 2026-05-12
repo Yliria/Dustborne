@@ -18,9 +18,11 @@ namespace Project.UI
     [DisallowMultipleComponent]
     public class FloatingTextService : MonoBehaviour
     {
-        public static readonly Color PickupColor = new(0.45f, 0.95f, 0.45f);
-        public static readonly Color ErrorColor  = new(0.95f, 0.35f, 0.35f);
-        public static readonly Color InfoColor   = new(0.95f, 0.95f, 0.95f);
+        public static readonly Color PickupColor  = new(0.45f, 0.95f, 0.45f);
+        public static readonly Color ErrorColor   = new(0.95f, 0.35f, 0.35f);
+        public static readonly Color InfoColor    = new(0.95f, 0.95f, 0.95f);
+        public static readonly Color LevelUpColor = new(1.00f, 0.85f, 0.20f);
+        public const float LevelUpDuration = 2.5f;
 
         [Header("Defaults")]
         [SerializeField, Min(0.2f)] float defaultDuration = 1.5f;
@@ -110,6 +112,15 @@ namespace Project.UI
         public static void SpawnInfo(string message, Vector3 worldPos)
         {
             Spawn(message, worldPos, InfoColor);
+        }
+
+        /// Gold-coloured, slightly longer-lived toast for skill level-ups.
+        /// Anchored to a world position (typically the unit's head) — level
+        /// ups are unit-state events, not click events, so the mouse anchor
+        /// would feel disconnected.
+        public static void SpawnLevelUp(string skillName, int newLevel, Vector3 worldPos)
+        {
+            Spawn($"LEVEL UP — {skillName} Lv{newLevel}", worldPos, LevelUpColor, LevelUpDuration);
         }
 
         // ---- Mouse-anchored overloads ----

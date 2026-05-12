@@ -413,7 +413,8 @@ Assets/_Project/
       GameTimeDebugUI.cs        HUD top-left
       HealthSkillsDebugPanel.cs F1 toggle, paper-doll + Inventory + Harvestables + Crafting + buttons
     UI/                         Project.UI
-      FloatingTextService.cs    world-anchored toasts (pickup/error/info)
+      FloatingTextService.cs    world-anchored toasts (pickup/error/info/levelup)
+      UnitFeedbackToasts.cs     unit-event → toast bridge (SkillSystem.OnLevelUp etc.)
     Editor/                     Project.EditorTools
       MVPSceneSetup.cs          Tools menu builder
   ScriptableObjects/
@@ -530,6 +531,7 @@ Cycle de test "from scratch to crossbow" :
 - Input manquant (craft) → rouge, `Missing: <Item> ×N`.
 - Pas de station (craft) → rouge, `No Workbench found`.
 - Inputs disparus pendant un craft → rouge, `Inputs lost: <Item> ×N`.
+- **Level up de skill** → doré, `LEVEL UP — <Skill> Lv<N>`, durée 2.5s, anchor au-dessus de la tête de l'unité (pas mouse — c'est un évènement de l'unité, pas du clic). Branché via `UnitFeedbackToasts` sur le prefab Unit.
 
 API :
 - `SpawnAtMouse / SpawnPickupAtMouse / SpawnErrorAtMouse / SpawnInfoAtMouse` — projection auto curseur → plan y=0 (utilisé par tous les hooks actuels).

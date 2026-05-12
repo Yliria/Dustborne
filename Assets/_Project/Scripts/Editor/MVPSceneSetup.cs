@@ -212,6 +212,10 @@ namespace Project.EditorTools
             // movement). Split out of the bridge for separation of concerns.
             go.AddComponent<PassiveXPHooks>();
 
+            // Bridge between unit-state events (level-ups today, more later)
+            // and FloatingTextService.
+            go.AddComponent<UnitFeedbackToasts>();
+
             var prefab = PrefabUtility.SaveAsPrefabAsset(go, UnitPrefabPath);
             Object.DestroyImmediate(go);
             return prefab;
