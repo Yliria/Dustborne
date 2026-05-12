@@ -10,19 +10,19 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 9c3ba272901a2204eb173bd5bfae5776, type: 3}
-  m_Name: BodyPart_ArmLeft
+  m_Name: BodyPart_HandLeft
   m_EditorClassIdentifier: Assembly-CSharp::Project.Health.BodyPartDefinition
-  Id: 3
-  DisplayName: Left Arm
+  Id: 7
+  DisplayName: Left Hand
   IsVital: 0
   CanBeSevered: 1
-  BaseMaxHP: 50
+  BaseMaxHP: 25
   WoundedThreshold: 0.7
   BrokenThreshold: 0.25
   BleedingHPThreshold: 0.5
-  BleedRateWounded: 0.5
-  BleedRateBroken: 1.5
-  BleedRateSevered: 3
+  BleedRateWounded: 0.3
+  BleedRateBroken: 1
+  BleedRateSevered: 2
   MoveSpeedPenaltyIfBroken: 0
   MoveSpeedPenaltyIfSevered: 0
-  SeveredChildren: 07000000
+  SeveredChildren: 

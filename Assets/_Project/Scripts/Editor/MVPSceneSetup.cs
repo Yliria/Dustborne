@@ -128,19 +128,23 @@ namespace Project.EditorTools
             // still hit the unit.
             var go = new GameObject("Unit");
 
+            // Sized to the Poucou chibi silhouette: ~0.95 m tall, ~0.50 m wide.
+            // The CapsuleCollider wraps the whole body so PlayerInputController
+            // raycasts and physics queries land on the unit regardless of which
+            // segment the cursor hovers.
             var col = go.AddComponent<CapsuleCollider>();
-            col.center = new Vector3(0f, 0.92f, 0f);
-            col.height = 1.85f;
-            col.radius = 0.30f;
+            col.center = new Vector3(0f, 0.475f, 0f);
+            col.height = 0.95f;
+            col.radius = 0.25f;
             col.direction = 1; // Y axis
 
             var agent = go.AddComponent<NavMeshAgent>();
-            agent.radius = 0.30f;
-            agent.height = 1.85f;
-            // Pivot is at the unit's feet (y=0). The stickman visual is
-            // anchored on that ground plane in BuildUnitVisual, so we want
-            // baseOffset = 0 — the NavMeshAgent now snaps the *feet* to the
-            // navmesh, not the body's centre.
+            agent.radius = 0.25f;
+            agent.height = 0.95f;
+            // Pivot is at the unit's feet (y=0). The Poucou visual is anchored
+            // on that ground plane in BuildUnitVisual, so we want baseOffset = 0
+            // — the NavMeshAgent now snaps the *feet* to the navmesh, not the
+            // body's centre.
             agent.baseOffset = 0f;
             agent.speed = 4.5f;
             agent.angularSpeed = 720f;
@@ -228,17 +232,19 @@ namespace Project.EditorTools
             return prefab;
         }
 
-        // ---- Unit visual (stickman) ----
+        // ---- Unit visual (Poucou chibi) ----
 
-        /// Reconstructs the "Visual" child of the given Unit root: 15
-        /// renderable segments arranged as a humanoid (head, torso, abdomen,
-        /// 3-segment arms × 2, 3-segment legs × 2), each carrying a
-        /// BodyPartVisual targeting its BodyPartId. The pivot is at the
-        /// feet (y = 0 ground plane), matching NavMeshAgent.baseOffset = 0.
+        /// Reconstructs the "Visual" child of the given Unit root as a 0.95m
+        /// chibi character ("Poucou"): oversized head, stocky torso, short
+        /// limbs with distinct hands and feet. 15 renderable segments mapped
+        /// to 11 BodyPartIds — upper-arm + forearm both bound to ArmLeft/Right,
+        /// thigh + shin both bound to LegLeft/Right, hands and feet are
+        /// first-class parts.
         ///
-        /// Safe to call repeatedly: an existing "Visual" child is destroyed
-        /// before the rebuild, so positions, scales and BodyPartId targets
-        /// always reflect the latest data layer.
+        /// All segments share Mat_Poucou.mat; per-instance tinting is handled
+        /// by BodyPartVisual through MaterialPropertyBlock (no Material clone).
+        /// Pivot is at the feet (y = 0), matching NavMeshAgent.baseOffset = 0.
+        /// Safe to re-run: any existing "Visual" child is destroyed first.
         public static void BuildUnitVisual(GameObject unitRoot)
         {
             var existing = unitRoot.transform.Find("Visual");
@@ -250,80 +256,57 @@ namespace Project.EditorTools
             visual.transform.localRotation = Quaternion.identity;
             visual.transform.localScale = Vector3.one;
 
-            // Single shared material — MaterialPropertyBlock does the tinting.
+            // Single shared material, beige peau Poucou (~#EBD79F).
+            // MaterialPropertyBlock does the per-instance tinting.
             var skin = CreateOrUpdateMaterial(
-                ProjectRoot + "/Art/Mat_BodyPart.mat",
-                new Color(0.85f, 0.78f, 0.70f));
+                ProjectRoot + "/Art/Mat_Poucou.mat",
+                new Color(0.92f, 0.84f, 0.62f));
 
-            // Centerline (head / torso / abdomen).
-            MakeStickmanSphere  (visual.transform, "Head",       0.22f, new Vector3( 0.00f, 1.68f, 0.00f), BodyPartId.Head,    skin);
-            MakeStickmanCylinder(visual.transform, "Torso",      0.32f, 0.22f, 0.42f, new Vector3( 0.00f, 1.36f, 0.00f), BodyPartId.Torso,   skin);
-            MakeStickmanCylinder(visual.transform, "Abdomen",    0.28f, 0.20f, 0.20f, new Vector3( 0.00f, 1.05f, 0.00f), BodyPartId.Abdomen, skin);
+            // ---- Centerline ----
+            MakePoucouSphere  (visual.transform, "Head",        new Vector3(0.40f, 0.40f, 0.40f), new Vector3( 0.00f, 0.75f, 0.00f), BodyPartId.Head,    skin);
+            MakePoucouCylinder(visual.transform, "Torso",       new Vector3(0.28f, 0.10f, 0.28f), new Vector3( 0.00f, 0.45f, 0.00f), BodyPartId.Torso,   skin);
+            MakePoucouCylinder(visual.transform, "Abdomen",     new Vector3(0.24f, 0.05f, 0.24f), new Vector3( 0.00f, 0.30f, 0.00f), BodyPartId.Abdomen, skin);
 
-            // Left arm — upper + forearm bound to ArmLeft, hand to HandLeft.
-            MakeStickmanCylinder(visual.transform, "UpperArm_L", 0.10f, 0.10f, 0.32f, new Vector3(-0.27f, 1.41f, 0.00f), BodyPartId.ArmLeft,  skin);
-            MakeStickmanCylinder(visual.transform, "Forearm_L",  0.09f, 0.09f, 0.32f, new Vector3(-0.27f, 1.09f, 0.00f), BodyPartId.ArmLeft,  skin);
-            MakeStickmanSphere  (visual.transform, "Hand_L",     0.11f, new Vector3(-0.27f, 0.86f, 0.00f), BodyPartId.HandLeft, skin);
+            // ---- Left arm ----
+            MakePoucouCylinder(visual.transform, "UpperArm_L",  new Vector3(0.06f, 0.05f, 0.06f), new Vector3(-0.18f, 0.50f, 0.00f), BodyPartId.ArmLeft,  skin);
+            MakePoucouCylinder(visual.transform, "Forearm_L",   new Vector3(0.05f, 0.05f, 0.05f), new Vector3(-0.19f, 0.40f, 0.00f), BodyPartId.ArmLeft,  skin);
+            MakePoucouSphere  (visual.transform, "Hand_L",      new Vector3(0.10f, 0.10f, 0.10f), new Vector3(-0.20f, 0.32f, 0.00f), BodyPartId.HandLeft, skin);
 
-            // Right arm (mirror x).
-            MakeStickmanCylinder(visual.transform, "UpperArm_R", 0.10f, 0.10f, 0.32f, new Vector3( 0.27f, 1.41f, 0.00f), BodyPartId.ArmRight,  skin);
-            MakeStickmanCylinder(visual.transform, "Forearm_R",  0.09f, 0.09f, 0.32f, new Vector3( 0.27f, 1.09f, 0.00f), BodyPartId.ArmRight,  skin);
-            MakeStickmanSphere  (visual.transform, "Hand_R",     0.11f, new Vector3( 0.27f, 0.86f, 0.00f), BodyPartId.HandRight, skin);
+            // ---- Right arm (mirror x) ----
+            MakePoucouCylinder(visual.transform, "UpperArm_R",  new Vector3(0.06f, 0.05f, 0.06f), new Vector3( 0.18f, 0.50f, 0.00f), BodyPartId.ArmRight,  skin);
+            MakePoucouCylinder(visual.transform, "Forearm_R",   new Vector3(0.05f, 0.05f, 0.05f), new Vector3( 0.19f, 0.40f, 0.00f), BodyPartId.ArmRight,  skin);
+            MakePoucouSphere  (visual.transform, "Hand_R",      new Vector3(0.10f, 0.10f, 0.10f), new Vector3( 0.20f, 0.32f, 0.00f), BodyPartId.HandRight, skin);
 
-            // Left leg — thigh + shin bound to LegLeft, foot to FootLeft.
-            MakeStickmanCylinder(visual.transform, "Thigh_L",    0.13f, 0.13f, 0.46f, new Vector3(-0.10f, 0.72f, 0.00f), BodyPartId.LegLeft,  skin);
-            MakeStickmanCylinder(visual.transform, "Shin_L",     0.11f, 0.11f, 0.42f, new Vector3(-0.10f, 0.28f, 0.00f), BodyPartId.LegLeft,  skin);
-            MakeStickmanCube    (visual.transform, "Foot_L",     new Vector3(0.13f, 0.07f, 0.22f), new Vector3(-0.10f, 0.035f, 0.06f), BodyPartId.FootLeft, skin);
+            // ---- Left leg ----
+            MakePoucouCylinder(visual.transform, "Thigh_L",     new Vector3(0.08f, 0.06f, 0.08f), new Vector3(-0.07f, 0.18f, 0.00f), BodyPartId.LegLeft,  skin);
+            MakePoucouCylinder(visual.transform, "Shin_L",      new Vector3(0.07f, 0.05f, 0.07f), new Vector3(-0.07f, 0.08f, 0.00f), BodyPartId.LegLeft,  skin);
+            MakePoucouCube    (visual.transform, "Foot_L",      new Vector3(0.10f, 0.04f, 0.14f), new Vector3(-0.07f, 0.02f, 0.04f), BodyPartId.FootLeft, skin);
 
-            // Right leg (mirror x).
-            MakeStickmanCylinder(visual.transform, "Thigh_R",    0.13f, 0.13f, 0.46f, new Vector3( 0.10f, 0.72f, 0.00f), BodyPartId.LegRight,  skin);
-            MakeStickmanCylinder(visual.transform, "Shin_R",     0.11f, 0.11f, 0.42f, new Vector3( 0.10f, 0.28f, 0.00f), BodyPartId.LegRight,  skin);
-            MakeStickmanCube    (visual.transform, "Foot_R",     new Vector3(0.13f, 0.07f, 0.22f), new Vector3( 0.10f, 0.035f, 0.06f), BodyPartId.FootRight, skin);
+            // ---- Right leg (mirror x) ----
+            MakePoucouCylinder(visual.transform, "Thigh_R",     new Vector3(0.08f, 0.06f, 0.08f), new Vector3( 0.07f, 0.18f, 0.00f), BodyPartId.LegRight,  skin);
+            MakePoucouCylinder(visual.transform, "Shin_R",      new Vector3(0.07f, 0.05f, 0.07f), new Vector3( 0.07f, 0.08f, 0.00f), BodyPartId.LegRight,  skin);
+            MakePoucouCube    (visual.transform, "Foot_R",      new Vector3(0.10f, 0.04f, 0.14f), new Vector3( 0.07f, 0.02f, 0.04f), BodyPartId.FootRight, skin);
         }
 
-        static void MakeStickmanSphere(Transform parent, string name, float diameter, Vector3 localPos, BodyPartId part, Material mat)
+        static void MakePoucouSphere(Transform parent, string name, Vector3 localScale, Vector3 localPos, BodyPartId part, Material mat)
+            => MakePoucouSegment(PrimitiveType.Sphere, parent, name, localScale, localPos, part, mat);
+
+        static void MakePoucouCylinder(Transform parent, string name, Vector3 localScale, Vector3 localPos, BodyPartId part, Material mat)
+            => MakePoucouSegment(PrimitiveType.Cylinder, parent, name, localScale, localPos, part, mat);
+
+        static void MakePoucouCube(Transform parent, string name, Vector3 localScale, Vector3 localPos, BodyPartId part, Material mat)
+            => MakePoucouSegment(PrimitiveType.Cube, parent, name, localScale, localPos, part, mat);
+
+        static void MakePoucouSegment(PrimitiveType primitive, Transform parent, string name, Vector3 localScale, Vector3 localPos, BodyPartId part, Material mat)
         {
-            var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            var go = GameObject.CreatePrimitive(primitive);
             go.name = name;
             go.transform.SetParent(parent, false);
             go.transform.localPosition = localPos;
-            go.transform.localScale = Vector3.one * diameter;
-            Object.DestroyImmediate(go.GetComponent<Collider>());
-
-            var rend = go.GetComponent<Renderer>();
-            rend.sharedMaterial = mat;
-
-            var visual = go.AddComponent<BodyPartVisual>();
-            visual.TargetPart = part;
-            visual.Renderer = rend;
-        }
-
-        static void MakeStickmanCylinder(Transform parent, string name, float width, float depth, float height, Vector3 localPos, BodyPartId part, Material mat)
-        {
-            var go = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-            go.name = name;
-            go.transform.SetParent(parent, false);
-            go.transform.localPosition = localPos;
-            // Unity's cylinder primitive is 2 m tall at scale 1, so scale.y =
-            // height / 2 gives the correct world height.
-            go.transform.localScale = new Vector3(width, height * 0.5f, depth);
-            Object.DestroyImmediate(go.GetComponent<Collider>());
-
-            var rend = go.GetComponent<Renderer>();
-            rend.sharedMaterial = mat;
-
-            var visual = go.AddComponent<BodyPartVisual>();
-            visual.TargetPart = part;
-            visual.Renderer = rend;
-        }
-
-        static void MakeStickmanCube(Transform parent, string name, Vector3 size, Vector3 localPos, BodyPartId part, Material mat)
-        {
-            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            go.name = name;
-            go.transform.SetParent(parent, false);
-            go.transform.localPosition = localPos;
-            go.transform.localScale = size;
+            go.transform.localScale = localScale;
+            // The Poucou has no per-part hit colliders for the MVP (Module 6
+            // will introduce them). The unit's root CapsuleCollider is what
+            // catches clicks and physics queries.
             Object.DestroyImmediate(go.GetComponent<Collider>());
 
             var rend = go.GetComponent<Renderer>();

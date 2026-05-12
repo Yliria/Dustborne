@@ -1,4 +1,4 @@
-# Dustborne — Fondations + Santé/Sang + Skills + Items + Récolte + Crafting + Stickman
+# Dustborne — Fondations + Santé/Sang + Skills + Items + Récolte + Crafting + Poucou chibi
 
 Jeu RTS-like, vue de haut, **une unité** contrôlable par le joueur. Inspirations : Kenshi (pause active, compétences progressives, dégâts par parties du corps), Valheim/Rust (récolte → craft → armement). MVP : zone fixe, hand-crafted.
 
@@ -8,7 +8,7 @@ Sessions livrées :
 - **Session 3** — Items, Inventaire au poids, Pickup, intégration vitesse/XP, Revive.
 - **Session 4** — Dette technique (MPB, drop merge, dédup, extraction PassiveXPHooks) + Récolte (Harvestable, HarvestOrder, 9 noeuds en scène).
 - **Session 5** — Crafting (RecipeDefinition + RecipeDatabase + CraftingStation + CraftOrder, hand-craft & workbench, 9 recettes, 1 Workbench en scène, bandage + 5 armes placeholders).
-- **Session 5.5** — Stickman visuel (15 segments en primitives) + body parts étendues à 11 (mains + pieds), cascade Severed anatomique, BodyPartVisual avec MPB tinting.
+- **Session 5.5** — Poucou chibi visuel (15 segments en primitives, ~0.95m, tête disproportionnée) + body parts étendues à 11 (mains + pieds), cascade Severed anatomique, BodyPartVisual avec MPB tinting.
 
 Tous les modules suivants se branchent dessus sans modifier ces fondations.
 
@@ -157,19 +157,20 @@ return max(mult, 0)
 Ex : `LegLeft.Broken` (0.30) + `FootLeft.Broken` (0.15) = `0.70 × 0.85 = 0.595`. Les deux jambes + deux pieds Severed = `0.30 × 0.30 × 0.50 × 0.50 ≈ 0.0225` — l'unité devient glaciale mais jamais strictement à zéro. Les **mains** ont volontairement zéro pénalité ; elles serviront aux constraintes d'équipement en Module 6+.
 
 ### Visual feedback (Session 5.5)
-- **Bonhomme stickman** : le prefab Unit a un enfant `Visual` contenant 15 segments en primitives Unity (head sphere, torso/abdomen cylinders, 3-segment arms × 2, 3-segment legs × 2). Pivot du Unit au sol (`NavMeshAgent.baseOffset = 0`).
+- **Personnage Poucou** : le prefab Unit a un enfant `Visual` contenant 15 segments en primitives Unity arrangés en chibi (tête sphère 0.40m disproportionnée, torse/abdomen cylindres trapus, bras et jambes courts 3 segments chacun). **Hauteur totale ~0.95m**. Pivot du Unit au sol (`NavMeshAgent.baseOffset = 0`).
+- **Sizing root** : `NavMeshAgent.radius = 0.25, height = 0.95`. `CapsuleCollider` center `(0, 0.475, 0)`, height `0.95`, radius `0.25` — englobe le Poucou pour clics + physics.
 - **`BodyPartVisual`** (Project.Health) sur chaque segment renderable. Listen à `HealthSystem.OnPartStateChanged`, tint via `MaterialPropertyBlock` selon l'état :
-  - Healthy → beige peau de base
+  - Healthy → beige peau Poucou (`#EBD79F`)
   - Wounded → jaune teinté
   - Broken → orange teinté
   - Severed → rouge sombre **+ Renderer disabled** (le membre disparaît)
 - Plusieurs `BodyPartVisual` peuvent cibler le même `BodyPartId` (typique : upper-arm + forearm tous deux bindés à `ArmLeft`, retintés ensemble par le même event).
 - `HealthSystem.Revive()` fire `OnPartStateChanged` pour tous les parts qui transitent → les renderers re-enable et reprennent leur couleur.
-- **Pas de Material clone** : un seul `Mat_BodyPart.mat` partagé par les 15 segments ; MPB par instance.
+- **Pas de Material clone** : un seul `Mat_Poucou.mat` partagé par les 15 segments ; MPB par instance.
 - **Pas de hit collider par part** : un `CapsuleCollider` englobant sur la racine du Unit suffit pour clic + pathfinding. Les hit colliders par part arrivent en Module 6 (Combat).
 
 ### Menu de rebuild rapide
-`Tools → RTS MVP → Rebuild Unit Visual` régénère uniquement la hiérarchie `Visual` du prefab Unit (sans toucher aux components ou aux refs SO). Pratique pour itérer sur les proportions / couleurs.
+`Tools → RTS MVP → Rebuild Unit Visual` régénère uniquement la hiérarchie `Visual` du prefab Unit (sans toucher aux components ou aux refs SO). Pratique pour itérer sur les proportions / couleurs du Poucou. Le NavMeshAgent et le CapsuleCollider ne sont **pas** retouchés par ce menu — si on change la hauteur du Poucou, il faut aussi mettre à jour ces deux composants en éditant `BuildUnitPrefab` puis relancer `Build Scene And Prefabs`.
 
 ---
 
@@ -598,7 +599,8 @@ Les toasts utilisent `Time.unscaledTime` — ils continuent d'animer/fader même
 - Hit colliders par body part → **réservé Module 6 Combat**. Pour l'instant un seul `CapsuleCollider` englobant sur la racine du Unit.
 - Cascade Severed inverse (HandLeft severed → ArmLeft severed) → **uniquement parent → child**, jamais l'inverse.
 - Modifier `NavMeshAgent.baseOffset` au runtime → **set à 0 une fois pour toutes dans le prefab**, les pieds sur le sol.
-- Cloner des Materials pour le bonhomme → **un seul `Mat_BodyPart.mat` partagé, MPB par renderer**.
+- Cloner des Materials pour le Poucou → **un seul `Mat_Poucou.mat` partagé, MPB par renderer**.
+- Modifier les proportions du Poucou sans synchroniser le `CapsuleCollider` et le `NavMeshAgent` → **toujours mettre les trois à jour ensemble** (héberger les valeurs dans `BuildUnitPrefab` + `BuildUnitVisual`, le `Rebuild Unit Visual` ne touche pas root collider/agent).
 
 ---
 
@@ -629,6 +631,6 @@ Les toasts utilisent `Time.unscaledTime` — ils continuent d'animer/fader même
 - **Armes craftées dorment dans l'inventaire** : `spear_stone`, `sword_stone`, etc. ne servent à rien tant que Combat (Module 5) et Equipment (Module 6) ne sont pas livrés. Volontaire — on n'a pas voulu attendre.
 - **Pas de multi-outputs stochastiques** : chaque recette produit exactement ses Outputs déclarés. À étendre via `RecipeDefinition.OutputRoll` si besoin.
 - **Pas d'anim de craft** : l'unité reste figée comme pour Harvest. `LookAt` cosmétique uniquement.
-- **Stickman raide** : pas de rigging Mecanim, les bras pendent verticalement, les pieds ne pivotent pas. À reprendre avec un mesh rigged si on veut animer. La hiérarchie actuelle ne suit pas la convention humanoid Unity.
+- **Poucou raide** : pas de rigging Mecanim, les bras pendent verticalement, les pieds ne pivotent pas, pas d'idle bobbing. À reprendre avec un mesh rigged si on veut animer. La hiérarchie actuelle ne suit pas la convention humanoid Unity.
 - **Severed parts juste disabled** : les membres sectionnés sont invisibles, pas détachés physiquement. Pour un effet "membre qui tombe au sol" il faudrait re-parent + Rigidbody. Module 6+.
 - **Pas de hit colliders par part** : Module 6 (Combat). Pour l'instant un seul CapsuleCollider sur la racine, les dégâts sont dispatchés via `DamageInfo.TargetPart` par le caller (debug panel today, AttackOrder demain).

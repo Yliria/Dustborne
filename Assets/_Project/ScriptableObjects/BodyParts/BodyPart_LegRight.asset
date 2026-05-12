@@ -25,3 +25,4 @@ MonoBehaviour:
   BleedRateSevered: 3
   MoveSpeedPenaltyIfBroken: 0.3
   MoveSpeedPenaltyIfSevered: 0.7
+  SeveredChildren: 0a000000

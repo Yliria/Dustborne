@@ -23,8 +23,8 @@ namespace Project.Health
         [SerializeField] Renderer rend;
 
         [Header("Tints (MPB, no Material clone)")]
-        [Tooltip("Base colour of the part when fully healthy. Mixed toward the wounded / broken tints depending on state.")]
-        [SerializeField] Color healthyColor = new(0.85f, 0.78f, 0.70f);
+        [Tooltip("Base colour of the part when fully healthy. Mixed toward the wounded / broken tints depending on state. Defaults to the Poucou beige #EBD79F.")]
+        [SerializeField] Color healthyColor = new(0.92f, 0.84f, 0.62f);
         [SerializeField] Color woundedTint = new(1f, 0.85f, 0.40f);
         [SerializeField] Color brokenTint = new(1f, 0.50f, 0.15f);
         [SerializeField] Color severedTint = new(0.25f, 0.05f, 0.05f);
